@@ -1,0 +1,32 @@
+# Secrets and signing: this repo is public. Nothing here may ever be committed.
+Local.xcconfig
+*.xcconfig
+!Local.xcconfig.example
+.env
+.env.*
+*.pem
+*.p8
+*.p12
+*.key
+*.cer
+*.mobileprovision
+*.provisionprofile
+secrets*
+*.secret
+token*.txt
+
+# Xcode / build
+*.xcodeproj
+xcuserdata/
+DerivedData/
+build/
+*.xcarchive
+.swiftpm/
+.build/
+
+# Tooling / OS
+.DS_Store
+.claude/
+.superpowers/
+graphify-out/
+*.profraw

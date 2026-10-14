@@ -1,0 +1,42 @@
+import Foundation
+import Security
+
+/// The GitHub token lives only here. It is never written to UserDefaults, disk or logs.
+enum Keychain {
+    private static let service = "hangar.github-token"
+    private static let account = "default"
+
+    private static var base: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: service,
+         kSecAttrAccount as String: account]
+    }
+
+    static func read() -> String? {
+        var q = base
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: AnyObject?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
+              let data = out as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    @discardableResult
+    static func write(_ token: String) -> Bool {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return delete() }
+        let data = Data(trimmed.utf8)
+        let update = SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if update == errSecSuccess { return true }
+        var add = base
+        add[kSecValueData as String] = data
+        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+    }
+
+    @discardableResult
+    static func delete() -> Bool {
+        let s = SecItemDelete(base as CFDictionary)
+        return s == errSecSuccess || s == errSecItemNotFound
+    }
+}

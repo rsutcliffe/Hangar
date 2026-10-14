@@ -1,0 +1,3 @@
+// Copy to Local.xcconfig (gitignored) and fill in. Never commit the real file.
+PRODUCT_BUNDLE_IDENTIFIER = com.example.hangar
+DEVELOPMENT_TEAM =
