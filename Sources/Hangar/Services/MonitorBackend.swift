@@ -52,7 +52,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                     var reached = false
                     var why = ""
                     func note(_ e: Error) {
-                        if case ShellError.failed(_, let m) = e { why = m.split(separator: "\n").last.map { $0.trimmingCharacters(in: .whitespaces) } ?? "" }
+                        if case ShellError.failed(_, let m) = e { why = m.split(separator: "\n").last.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? "" }
                         else if case ShellError.timedOut = e { why = "timed out" }
                         else if case ShellError.notFound(let p) = e { why = "\(p) not found" }
                     }
@@ -165,7 +165,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                 let l = j.labels.map { $0.lowercased() }
                 let arch: Arch = l.contains(where: { $0.contains("x64") || $0.contains("x86") }) ? .x86 : .arm64
                 return QueuedJob(id: j.id, repo: j.repo, workflow: j.workflow, branch: j.branch,
-                                 runNumber: j.runNumber, arch: arch, queuedAt: j.createdAt)
+                                 runNumber: j.runNumber, arch: arch, queuedAt: j.createdAt, job: j.name)
             }
     }
 }

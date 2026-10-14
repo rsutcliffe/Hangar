@@ -58,7 +58,7 @@ final class MonitorStore {
             var intent = intents[o.id] ?? RunnerIntent()
 
             if let j = obs.job, j.failedStep != nil || j.exitCode != nil {
-                if dismissedFailures.contains(j.id) { obs.job = nil } else if failureSeen[j.id] == nil { failureSeen[j.id] = now }
+                if dismissedFailures.contains(j.id) { obs.job = nil } else if failureSeen[j.id] == nil { failureSeen[j.id] = min(now, j.lastOutputAt) }   // hold counts from when it failed
             }
             let seen = obs.job.flatMap { failureSeen[$0.id] }
             var state = StateRules.derive(obs, intent: intent, failureSeenAt: seen, now: now, stallThreshold: config.stallThreshold)

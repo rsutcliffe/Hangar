@@ -64,6 +64,7 @@ struct QueuedJob: Identifiable, Equatable, Sendable {
     var runNumber: Int
     var arch: Arch
     var queuedAt: Date
+    var job = ""
 }
 
 extension [QueuedJob] {

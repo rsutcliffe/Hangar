@@ -3,7 +3,6 @@ import SwiftUI
 struct MonitorWindow: View {
     @Bindable var store: MonitorStore
     @Environment(\.scenePhase) private var phase
-    @State private var topInset: CGFloat = 28
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { ctx in
@@ -21,10 +20,9 @@ struct MonitorWindow: View {
                     }
                     UpNextCard(queue: store.queue, now: ctx.date)
                 }
-                .padding(.horizontal, 14).padding(.bottom, 14).padding(.top, 8 - topInset)
+                .padding(.horizontal, 14).padding(.bottom, 14)
             }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topInset = $0 }
         .foregroundStyle(Theme.text)
         .frame(width: 644)
         .background { Color.clear.glassEffect(.regular, in: .rect(cornerRadius: Theme.windowRadius)).ignoresSafeArea() }
@@ -43,6 +41,8 @@ struct MonitorWindow: View {
                 .background(Theme.pill, in: Capsule())
         }
         .frame(height: 28).padding(.leading, 70).padding(.trailing, 6)
+        // Sit level with the traffic lights, which live in the title bar area above the content.
+        .offset(y: -22).padding(.bottom, -22)
     }
 }
 

@@ -18,7 +18,7 @@ struct UpNextCard: View {
                 ForEach(queue.prefix(4)) { j in
                     Divider().overlay(Theme.line)
                     HStack(spacing: 12) {
-                        (Text(verbatim: "\(j.repo) · \(j.workflow)").fontWeight(.semibold)
+                        (Text(verbatim: "\(j.repo) · \(j.workflow)" + (j.job.isEmpty || j.job == j.workflow ? "" : " / \(j.job)")).fontWeight(.semibold)
                             + Text(verbatim: " #\(j.runNumber) · \(j.branch)").foregroundColor(Theme.muted))
                             .font(.system(size: 12)).lineLimit(1).truncationMode(.tail)
                             .frame(maxWidth: .infinity, alignment: .leading)

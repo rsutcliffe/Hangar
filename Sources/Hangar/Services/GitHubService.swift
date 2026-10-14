@@ -24,6 +24,7 @@ struct GHJob: Equatable, Sendable {
     var labels: [String]; var runnerName: String?
     var createdAt: Date; var startedAt: Date?; var completedAt: Date?
     var steps: [Step]
+    var name = ""
     struct Step: Equatable, Sendable { var number: Int; var status: String; var conclusion: String? }
 }
 
@@ -109,7 +110,8 @@ actor GitHubService {
             return GHJob(id: id, runId: run.id, repo: repo, workflow: run.name, runNumber: run.number,
                          branch: run.branch, status: j["status"] as? String ?? "", conclusion: j["conclusion"] as? String,
                          labels: j["labels"] as? [String] ?? [], runnerName: j["runner_name"] as? String,
-                         createdAt: created, startedAt: date(j["started_at"]), completedAt: date(j["completed_at"]), steps: steps)
+                         createdAt: created, startedAt: date(j["started_at"]), completedAt: date(j["completed_at"]), steps: steps,
+                         name: j["name"] as? String ?? "")
         }
     }
 }
