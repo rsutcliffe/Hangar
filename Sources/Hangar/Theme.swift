@@ -6,6 +6,7 @@ enum Theme {
     static let muted = Color("Muted")
     static let line = Color("Line")          // track and hairline
     static let cardFill = Color("CardFill")
+    static let glassFill = Color("GlassFill")   // body tint under the window glass
     static let pill = Color("Pill")
     static let pillHover = Color("PillHover")
     static let running = Color("Running")

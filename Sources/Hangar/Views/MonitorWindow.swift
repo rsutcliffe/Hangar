@@ -25,7 +25,13 @@ struct MonitorWindow: View {
         }
         .foregroundStyle(Theme.text)
         .frame(width: 644)
-        .background { Color.clear.glassEffect(.regular, in: .rect(cornerRadius: Theme.windowRadius)).ignoresSafeArea() }
+        .background {
+            ZStack {
+                RoundedRectangle(cornerRadius: Theme.windowRadius).fill(Theme.glassFill)
+                Color.clear.glassEffect(.regular, in: .rect(cornerRadius: Theme.windowRadius))
+            }
+            .ignoresSafeArea()
+        }
         .background(WindowChrome())
         .onChange(of: phase) { _, p in store.windowVisible = (p == .active) }
     }
