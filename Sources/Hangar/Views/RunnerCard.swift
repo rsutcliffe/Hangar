@@ -12,11 +12,19 @@ struct RunnerCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(runner.id).font(.system(size: 13, weight: .semibold))
-                Text(runner.spec).font(.system(size: 11)).foregroundStyle(Theme.muted)
+            // Runner names are agent names and can be long: spec drops below the name when they do not fit.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(runner.id).font(.system(size: 13, weight: .semibold)).fixedSize()
+                    Text(runner.spec).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(runner.id).font(.system(size: 13, weight: .semibold)).lineLimit(1).truncationMode(.middle)
+                    Text(runner.spec).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                }
             }
             .lineLimit(1)
+            .frame(maxWidth: .infinity, minHeight: 32, alignment: .topLeading)
 
             Text(figure)
                 .font(.system(size: s == .restarting ? 28 : 38, weight: .semibold))
