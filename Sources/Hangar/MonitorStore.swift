@@ -83,7 +83,7 @@ final class MonitorStore {
             out.append(Runner(id: o.id, arch: o.arch, cpus: o.cpus, memoryGB: o.memoryGB, state: state,
                               draining: intent.draining, job: shown, cpuHistory: history[o.id] ?? [],
                               memUsedGB: o.memUsedGB, lastJobEndedAt: o.lastJobEndedAt ?? lastEnded[o.id],
-                              failedAt: seen, host: o.host))
+                              failedAt: seen, host: o.host, standby: o.standby))
         }
         runners = out
         lastUpdated = now

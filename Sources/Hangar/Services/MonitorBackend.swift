@@ -139,7 +139,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                                              cpus: m.snap.cpus ?? m.info?.cpus ?? 0, memoryGB: m.snap.memTotalGB ?? m.info?.memoryGB ?? 0,
                                              vmRunning: true, ghOnline: gh?.online ?? false,
                                              listenerRunning: f.listenerRunning, busy: gh?.busy ?? false,
-                                             host: m.label, native: m.native,
+                                             host: m.label, native: m.native, standby: gh?.isStandby ?? false,
                                              job: job, cpuPercent: m.snap.cpuPercent, memUsedGB: m.snap.memUsedGB, lastJobEndedAt: nil))
             }
         }

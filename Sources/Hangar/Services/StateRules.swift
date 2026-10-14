@@ -12,6 +12,7 @@ struct RunnerObservation: Equatable, Sendable {
     var busy: Bool
     var host = ""
     var native = false
+    var standby = false
     var job: ActiveJob?
     var cpuPercent: Double
     var memUsedGB: Double

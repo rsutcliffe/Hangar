@@ -62,6 +62,8 @@ final class GitHubParseTests: XCTestCase {
     func testRunnersRunsJobsAndQueue() {
         let runners = GitHubService.parseRunners(json(#"{"runners":[{"name":"arm-01-x","status":"online","busy":true,"labels":[{"name":"self-hosted"},{"name":"ARM64"}]}]}"#))
         XCTAssertEqual(runners, [GHRunner(name: "arm-01-x", online: true, busy: true, labels: ["self-hosted", "ARM64"])])
+        XCTAssertFalse(runners[0].isStandby)
+        XCTAssertTrue(GHRunner(name: "x", online: true, busy: false, labels: ["self-hosted", "MacBook-Standby"]).isStandby)
         let runs = GitHubService.parseRuns(json(#"{"workflow_runs":[{"id":9,"name":"build","run_number":482,"head_branch":"main","status":"in_progress","updated_at":"2026-10-14T10:00:00Z"}]}"#))
         XCTAssertEqual(runs.first?.number, 482)
         let jobs = GitHubService.parseJobs(json(#"""
@@ -97,6 +99,7 @@ final class GitHubParseTests: XCTestCase {
                                         jobs: [job], now: now)
         XCTAssertEqual(snap.runners.map(\.id), ["m4-scoreview-ci", "mac-mini-m4"])
         XCTAssertEqual(snap.runners[0].job?.id, 1); XCTAssertEqual(snap.runners[0].cpus, 6)
+        XCTAssertFalse(snap.runners[0].standby)
         XCTAssertEqual(snap.runners[1].cpus, 10); XCTAssertEqual(snap.runners[1].memoryGB, 16, accuracy: 0.001); XCTAssertTrue(snap.runners[1].native)
     }
 }
@@ -175,5 +178,7 @@ final class AccessibilityTests: XCTestCase {
         r.state = .running; r.job?.lastOutputAt = now
         XCTAssertEqual(r.accessibilitySummary(now: now), "arm-02, Running, test · web #1190, step 3 of 7, 42 percent")
         XCTAssertEqual(Runner(id: "x", arch: .x86, cpus: 2, memoryGB: 4, state: .offline).accessibilitySummary(now: now), "x, Offline")
+        var s = Runner(id: "y", arch: .x86, cpus: 2, memoryGB: 4, state: .idle); s.standby = true
+        XCTAssertEqual(s.accessibilitySummary(now: now), "y, Idle, standby")
     }
 }

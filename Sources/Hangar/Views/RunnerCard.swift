@@ -76,6 +76,15 @@ struct RunnerCard: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: Theme.cardRadius))
         .overlay { if problem { RoundedRectangle(cornerRadius: Theme.cardRadius).strokeBorder(Theme.problem, lineWidth: 1.5) } }
+        // In the top margin, above the name's line, so a long runner name keeps its full width.
+        .overlay(alignment: .topTrailing) {
+            if runner.standby {
+                Text("Standby").font(.system(size: 9, weight: .medium)).foregroundStyle(Theme.muted)
+                    .padding(.vertical, 1).padding(.horizontal, 7)
+                    .background(Theme.pill, in: Capsule())
+                    .padding(.top, 6).padding(.trailing, 10)
+            }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(runner.accessibilitySummary(now: now))
     }

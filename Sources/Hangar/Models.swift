@@ -48,6 +48,7 @@ struct Runner: Identifiable, Equatable, Sendable {
     var lastJobEndedAt: Date?
     var failedAt: Date?
     var host = ""
+    var standby = false
 
     var spec: String {
         let hw = "\(cpus) CPU · \(Format.gb(memoryGB))"
@@ -84,6 +85,7 @@ extension Runner {
             default: break
             }
         }
+        if standby { parts.append("standby") }
         if draining { parts.append("draining") }
         return parts.joined(separator: ", ")
     }
