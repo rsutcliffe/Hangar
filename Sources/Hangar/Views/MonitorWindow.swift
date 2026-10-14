@@ -47,7 +47,24 @@ struct MonitorWindow: View {
 }
 
 /// Clear, shadowed window with the title bar folded into the glass; traffic lights stay system-drawn.
+/// Also keeps the window on screen: it grows when runners are added, so pull it back into the visible area.
 private struct WindowChrome: NSViewRepresentable {
+    final class Coordinator {
+        var observer: NSObjectProtocol?
+        deinit { observer.map(NotificationCenter.default.removeObserver) }
+
+        func keepOnScreen(_ w: NSWindow) {
+            guard let area = w.screen?.visibleFrame else { return }
+            var f = w.frame
+            f.origin.y = max(f.origin.y, area.minY)                      // bottom edge inside the visible area
+            f.origin.y = min(f.origin.y, area.maxY - f.height)           // top edge too (only bites if taller than the screen)
+            f.origin.x = min(max(f.origin.x, area.minX), area.maxX - f.width)
+            if f != w.frame { w.setFrame(f, display: true) }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeNSView(context: Context) -> NSView {
         let v = NSView()
         DispatchQueue.main.async {
@@ -59,6 +76,11 @@ private struct WindowChrome: NSViewRepresentable {
             w.titleVisibility = .hidden
             w.styleMask.insert(.fullSizeContentView)
             w.isMovableByWindowBackground = true
+            let c = context.coordinator
+            c.observer = NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: w, queue: .main) { [weak c, weak w] _ in
+                if let c, let w { c.keepOnScreen(w) }
+            }
+            c.keepOnScreen(w)
         }
         return v
     }

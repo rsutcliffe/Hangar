@@ -6,7 +6,7 @@ struct SettingsView: View {
     @AppStorage(Config.Key.stallMinutes) private var stallMinutes = 10
     @AppStorage(Config.Key.pollSeconds) private var pollSeconds = 15
     @State private var token = ""
-    @State private var hasToken = Keychain.read() != nil
+    @State private var hasToken = Keychain.token() != nil
 
     var body: some View {
         Form {

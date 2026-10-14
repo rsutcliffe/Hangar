@@ -38,7 +38,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
 
     func poll(config: Config) async throws -> BackendSnapshot {
         guard config.isConfigured else { throw BackendError.notConfigured }
-        guard let token = Keychain.read() else { throw GitHubError.noToken }
+        guard let token = Keychain.token() else { throw GitHubError.noToken }
         let hosts = self.hosts
 
         // Probe every host concurrently; an unreachable host is a warning, not a failure.
