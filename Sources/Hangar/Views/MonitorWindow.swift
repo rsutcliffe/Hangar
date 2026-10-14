@@ -10,7 +10,7 @@ struct MonitorWindow: View {
             GlassEffectContainer(spacing: 10) {
                 VStack(spacing: 12) {
                     header
-                    HStack(alignment: .top, spacing: 10) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: 3), spacing: 10) {
                         ForEach(store.runners) { r in
                             RunnerCard(runner: r, now: ctx.date,
                                        onRestart: { store.restart(r.id) }, onDrain: { store.toggleDrain(r.id) })

@@ -4,12 +4,15 @@ import Foundation
 struct Config: Equatable, Sendable {
     enum Key {
         static let profiles = "profiles"
+        static let hosts = "hosts"
         static let stallMinutes = "stallMinutes"
         static let pollSeconds = "pollSeconds"
     }
 
     /// Colima profiles to scan. Runners (and the repos they serve) are discovered inside each VM.
     var profiles: [String] = ["default"]
+    /// "local" or an SSH target (key auth only). Each host is scanned for a Colima VM and native runner dirs.
+    var hosts: [String] = ["local"]
     var stallMinutes = 10
     var pollSeconds = 15
 
@@ -20,6 +23,8 @@ struct Config: Equatable, Sendable {
         var c = Config()
         let profiles = list(d.string(forKey: Key.profiles))
         if !profiles.isEmpty { c.profiles = profiles }
+        let hosts = list(d.string(forKey: Key.hosts)).filter { $0 == "local" || isSafeHost($0) }
+        if !hosts.isEmpty { c.hosts = hosts }
         let stall = d.integer(forKey: Key.stallMinutes)
         if stall > 0 { c.stallMinutes = stall }
         let poll = d.integer(forKey: Key.pollSeconds)
@@ -35,6 +40,11 @@ struct Config: Equatable, Sendable {
     /// Profile names and repo names are interpolated into commands and URLs, so keep them boring.
     static func isSafeName(_ s: String) -> Bool {
         !s.isEmpty && s.allSatisfy { $0.isLetter || $0.isNumber || "-_.".contains($0) }
+    }
+
+    /// An SSH target goes on a command line: no leading dash, no shell characters.
+    static func isSafeHost(_ s: String) -> Bool {
+        !s.isEmpty && !s.hasPrefix("-") && s.allSatisfy { $0.isLetter || $0.isNumber || "-_.@".contains($0) }
     }
 
     /// Runner directory is interpolated into a remote shell line.

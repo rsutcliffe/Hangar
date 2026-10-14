@@ -15,6 +15,9 @@ final class MonitorStore {
     private var dismissedFailures: Set<Int> = []
     private var history: [String: [Double]] = [:]
     private var lastEnded: [String: Date] = [:]
+    private var lastActive: [String: Date] = {
+        (UserDefaults.standard.dictionary(forKey: "lastActive") as? [String: Double] ?? [:]).mapValues(Date.init(timeIntervalSince1970:))
+    }()
     private var pollTask: Task<Void, Never>?
     var windowVisible = true
 
@@ -39,7 +42,7 @@ final class MonitorStore {
         let config = Config.load()
         do {
             let snap = try await backend.poll(config: config)
-            errorMessage = nil
+            errorMessage = snap.warnings.isEmpty ? nil : snap.warnings.joined(separator: "; ")
             apply(snap, config: config, now: Date())
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? "Poll failed"
@@ -74,13 +77,16 @@ final class MonitorStore {
                 if state == .stalled { notifier.notify(.stalled, jobId: j.id, runner: o.id, job: j, silentMinutes: silent) }
                 if state == .failed { notifier.notify(.failed, jobId: j.id, runner: o.id, job: j, silentMinutes: 0) }
             }
+            if o.listenerRunning || o.busy { lastActive[o.id] = now }
+            if StaleRule.isStale(state: state, lastActive: lastActive[o.id], now: now) { continue }
             out.append(Runner(id: o.id, arch: o.arch, cpus: o.cpus, memoryGB: o.memoryGB, state: state,
                               draining: intent.draining, job: shown, cpuHistory: history[o.id] ?? [],
                               memUsedGB: o.memUsedGB, lastJobEndedAt: o.lastJobEndedAt ?? lastEnded[o.id],
-                              failedAt: seen))
+                              failedAt: seen, host: o.host))
         }
         runners = out
         lastUpdated = now
+        UserDefaults.standard.set(lastActive.mapValues(\.timeIntervalSince1970), forKey: "lastActive")
     }
 
     // MARK: actions

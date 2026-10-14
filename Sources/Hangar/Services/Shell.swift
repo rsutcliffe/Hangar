@@ -11,7 +11,7 @@ enum ShellError: Error, Equatable { case notFound(String), timedOut, failed(Int3
 
 /// Runs a binary with an argument array (never a shell string) and returns stdout.
 enum Shell {
-    static func run(_ path: String, _ args: [String], timeout: TimeInterval = 20) async throws -> String {
+    static func run(_ path: String, _ args: [String], stdin: String? = nil, timeout: TimeInterval = 20) async throws -> String {
         try await withCheckedThrowingContinuation { cont in
             DispatchQueue.global(qos: .utility).async {
                 let p = Process()
@@ -22,8 +22,13 @@ enum Shell {
                 p.environment = env
                 let out = Pipe(), err = Pipe()
                 p.standardOutput = out; p.standardError = err
-                p.standardInput = FileHandle.nullDevice
+                let inPipe = Pipe()
+                p.standardInput = stdin == nil ? FileHandle.nullDevice : inPipe
                 do { try p.run() } catch { cont.resume(throwing: ShellError.notFound(path)); return }
+                if let stdin {
+                    inPipe.fileHandleForWriting.write(Data(stdin.utf8))
+                    try? inPipe.fileHandleForWriting.close()
+                }
                 let timedOutFlag = Flag()
                 let timer = DispatchWorkItem { if p.isRunning { timedOutFlag.set(); p.terminate() } }
                 DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)

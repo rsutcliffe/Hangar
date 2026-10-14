@@ -3,6 +3,7 @@ import Foundation
 struct BackendSnapshot: Sendable {
     var runners: [RunnerObservation]
     var queue: [QueuedJob]
+    var warnings: [String] = []
 }
 
 /// Source of raw facts and the place side effects happen. Live = GitHub + Colima, Demo = scripted.
@@ -19,22 +20,72 @@ enum BackendError: Error, LocalizedError {
 
 final class LiveBackend: MonitorBackend, @unchecked Sendable {
     private let github = GitHubService()
-    private let colima = ColimaService()
+    private let hosts = HostService()
     private let lock = NSLock()
-    private var located: [String: (profile: String, dir: String)] = [:]    // runner name -> where it lives
+    private var located: [String: Place] = [:]          // runner name -> where it lives
+
+    struct Place: Sendable { var host: HostSpec; var profile: String?; var dir: String }
+
+    /// One VM or one native host, probed.
+    struct Machine: Sendable {
+        var label: String
+        var info: VMInfo?
+        var snap: VMSnapshot
+        var native: Bool
+        var host: HostSpec
+        var profile: String?
+    }
 
     func poll(config: Config) async throws -> BackendSnapshot {
         guard config.isConfigured else { throw BackendError.notConfigured }
         guard let token = Keychain.read() else { throw GitHubError.noToken }
-        let vms = try await colima.list()
+        let hosts = self.hosts
 
-        var snaps: [String: VMSnapshot] = [:]
-        for p in config.profiles where vms[p]?.running == true { snaps[p] = try? await colima.snapshot(profile: p) }
-        var map: [String: (profile: String, dir: String)] = [:]
-        for (p, s) in snaps { for r in s.runners { map[r.name] = (p, r.dir) } }
+        // Probe every host concurrently; an unreachable host is a warning, not a failure.
+        var machines: [Machine] = []
+        var warnings: [String] = []
+        await withTaskGroup(of: ([Machine], String?).self) { group in
+            for h in config.hosts.map(HostSpec.init) {
+                group.addTask {
+                    var out: [Machine] = []
+                    var hostname = ""
+                    var reached = false
+                    var why = ""
+                    func note(_ e: Error) {
+                        if case ShellError.failed(_, let m) = e { why = m.split(separator: "\n").last.map { $0.trimmingCharacters(in: .whitespaces) } ?? "" }
+                        else if case ShellError.timedOut = e { why = "timed out" }
+                        else if case ShellError.notFound(let p) = e { why = "\(p) not found" }
+                    }
+                    var vmsOrNil: [String: VMInfo]?
+                    do { vmsOrNil = try await hosts.listVMs(h) } catch { note(error) }
+                    if let vms = vmsOrNil {
+                        reached = true
+                        for p in config.profiles where vms[p]?.running == true {
+                            if let snap = try? await hosts.vmSnapshot(h, profile: p) {
+                                hostname = snap.hostname
+                                out.append(Machine(label: "", info: vms[p], snap: snap, native: false, host: h, profile: p))
+                            }
+                        }
+                    }
+                    var nativeOrNil: VMSnapshot?
+                    do { nativeOrNil = try await hosts.nativeSnapshot(h) } catch { if !reached { note(error) } }
+                    if let snap = nativeOrNil {
+                        reached = true; hostname = snap.hostname
+                        out.append(Machine(label: "", info: nil, snap: snap, native: true, host: h, profile: nil))
+                    }
+                    let label = h.isLocal ? "this Mac" : SnapshotParser.shortName(hostname.isEmpty ? (h.target ?? "") : hostname)
+                    out = out.map { var m = $0; m.label = label; return m }
+                    return (out, reached ? nil : "\(h.target ?? "This Mac") unreachable" + (why.isEmpty ? "" : " (\(why))"))
+                }
+            }
+            for await (m, w) in group { machines += m; if let w { warnings.append(w) } }
+        }
+
+        var map: [String: Place] = [:]
+        for m in machines { for r in m.snap.runners { map[r.name] = Place(host: m.host, profile: m.profile, dir: r.dir) } }
         lock.withLock { located = map }
 
-        let repos = Set(snaps.values.flatMap { $0.runners }.map { RepoRef(owner: $0.owner, repo: $0.repo) })
+        let repos = Set(machines.flatMap { $0.snap.runners }.map { RepoRef(owner: $0.owner, repo: $0.repo) })
         let github = self.github
         let (runners, jobs) = try await withThrowingTaskGroup(of: ([GHRunner], [GHJob]).self) { group in
             for r in repos {
@@ -48,34 +99,33 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
             for try await (rs, js) in group { allR += rs; allJ += js }
             return (allR, allJ)
         }
-        return Self.assemble(config: config, vms: vms, snaps: snaps, runners: runners, jobs: jobs, now: Date())
+        var snap = Self.assemble(machines: machines, runners: runners, jobs: jobs, now: Date())
+        snap.warnings = warnings.sorted()
+        return snap
     }
 
-    private func place(_ id: String) throws -> (profile: String, dir: String) {
-        guard let p = lock.withLock({ located[id] }) else { throw ShellError.failed(2, "Runner \(id) not found in VM") }
+    private func place(_ id: String) throws -> Place {
+        guard let p = lock.withLock({ located[id] }) else { throw ShellError.failed(2, "Runner \(id) not found on any host") }
         return p
     }
 
     func restart(_ id: String, config: Config) async throws {
         let p = try place(id)
-        try await colima.restartRunner(profile: p.profile, dir: p.dir)
+        try await hosts.restartRunner(p.host, profile: p.profile, dir: p.dir)
     }
 
     func setRunnerService(_ id: String, running: Bool, config: Config) async throws {
         let p = try place(id)
-        try await colima.setRunnerService(profile: p.profile, dir: p.dir, running: running)
+        try await hosts.setService(p.host, profile: p.profile, dir: p.dir, running: running)
     }
 
     struct RepoRef: Hashable, Sendable { var owner: String; var repo: String }
 
-    /// Pure join of the three sources; unit-tested.
-    static func assemble(config: Config, vms: [String: VMInfo], snaps: [String: VMSnapshot],
-                         runners: [GHRunner], jobs: [GHJob], now: Date) -> BackendSnapshot {
+    /// Pure join of the sources; unit-tested.
+    static func assemble(machines: [Machine], runners: [GHRunner], jobs: [GHJob], now: Date) -> BackendSnapshot {
         var obs: [RunnerObservation] = []
-        for profile in config.profiles {
-            guard let snap = snaps[profile] else { continue }
-            let vm = vms[profile]
-            for f in snap.runners {
+        for m in machines {
+            for f in m.snap.runners {
                 let gh = runners.first { $0.name == f.name }
                 let mine = jobs.filter { gh != nil && $0.runnerName == f.name }
                 var job: ActiveJob?
@@ -85,10 +135,12 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                             .max(by: { ($0.completedAt ?? .distantPast) < ($1.completedAt ?? .distantPast) }) {
                     job = activeJob(j, lastOutput: j.completedAt)
                 }
-                obs.append(RunnerObservation(id: f.name, arch: vm?.arch ?? .arm64, cpus: vm?.cpus ?? 0, memoryGB: vm?.memoryGB ?? 0,
-                                             vmRunning: vm?.running ?? false, ghOnline: gh?.online ?? false,
+                obs.append(RunnerObservation(id: f.name, arch: m.info?.arch ?? .arm64,
+                                             cpus: m.snap.cpus ?? m.info?.cpus ?? 0, memoryGB: m.snap.memTotalGB ?? m.info?.memoryGB ?? 0,
+                                             vmRunning: true, ghOnline: gh?.online ?? false,
                                              listenerRunning: f.listenerRunning, busy: gh?.busy ?? false,
-                                             job: job, cpuPercent: snap.cpuPercent, memUsedGB: snap.memUsedGB, lastJobEndedAt: nil))
+                                             host: m.label, native: m.native,
+                                             job: job, cpuPercent: m.snap.cpuPercent, memUsedGB: m.snap.memUsedGB, lastJobEndedAt: nil))
             }
         }
         return BackendSnapshot(runners: obs, queue: queue(from: jobs))

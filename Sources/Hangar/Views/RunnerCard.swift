@@ -20,7 +20,7 @@ struct RunnerCard: View {
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(runner.id).font(.system(size: 13, weight: .semibold)).lineLimit(1).truncationMode(.middle)
-                    Text(runner.spec).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    Text(runner.spec).font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(1)
                 }
             }
             .lineLimit(1)

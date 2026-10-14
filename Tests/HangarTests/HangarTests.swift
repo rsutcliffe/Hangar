@@ -78,26 +78,31 @@ final class GitHubParseTests: XCTestCase {
         let a = LiveBackend.activeJob(jobs[0], lastOutput: nil)
         XCTAssertEqual(a.currentStep, 2); XCTAssertEqual(a.totalSteps, 3)
     }
-    func testAssembleMatchesRunnerByExactName() {
-        var c = Config(); c.profiles = ["default"]
+    func testAssembleAcrossMachines() {
         let now = Date()
         let job = GHJob(id: 1, runId: 9, repo: "hoci", workflow: "build", runNumber: 482, branch: "main", status: "in_progress", conclusion: nil,
-                        labels: ["self-hosted"], runnerName: "colima-scoreview-ci", createdAt: now, startedAt: now, completedAt: nil,
+                        labels: ["self-hosted"], runnerName: "m4-scoreview-ci", createdAt: now, startedAt: now, completedAt: nil,
                         steps: [.init(number: 1, status: "in_progress", conclusion: nil)])
-        let facts = [RunnerFacts(dir: "/h/actions-runner-hoci", name: "colima-scoreview-ci", owner: "rsutcliffe", repo: "hoci", listenerRunning: true, lastOutputAt: now),
-                     RunnerFacts(dir: "/h/actions-runner", name: "colima-tenantsafe-ci", owner: "rsutcliffe", repo: "TenantShield", listenerRunning: false, lastOutputAt: nil)]
-        let snap = LiveBackend.assemble(config: c, vms: ["default": VMInfo(running: true, arch: .arm64, cpus: 6, memoryGB: 8)],
-                                        snaps: ["default": VMSnapshot(cpuPercent: 12, memUsedGB: 3, runners: facts)],
-                                        runners: [GHRunner(name: "colima-scoreview-ci", online: true, busy: true, labels: [])], jobs: [job], now: now)
-        XCTAssertEqual(snap.runners.map(\.id), ["colima-scoreview-ci", "colima-tenantsafe-ci"])
-        XCTAssertEqual(snap.runners[0].job?.id, 1)
-        XCTAssertFalse(snap.runners[1].listenerRunning)
-        XCTAssertNil(snap.runners[1].job)
+        let vm = LiveBackend.Machine(label: "mac-mini", info: VMInfo(running: true, arch: .arm64, cpus: 6, memoryGB: 12),
+            snap: VMSnapshot(cpuPercent: 12, memUsedGB: 3, runners: [
+                RunnerFacts(dir: "/h/a", name: "m4-scoreview-ci", owner: "rsutcliffe", repo: "hoci", listenerRunning: true, lastOutputAt: now)]),
+            native: false, host: HostSpec("192.0.2.10"), profile: "default")
+        let nat = LiveBackend.Machine(label: "mac-mini", info: nil,
+            snap: VMSnapshot(cpuPercent: 40, memUsedGB: 9, runners: [
+                RunnerFacts(dir: "/Users/u/actions-runner", name: "mac-mini-m4", owner: "rsutcliffe", repo: "CertsVault", listenerRunning: true, lastOutputAt: nil)],
+                             hostname: "mac-mini.local", cpus: 10, memTotalGB: 16),
+            native: true, host: HostSpec("192.0.2.10"), profile: nil)
+        let snap = LiveBackend.assemble(machines: [vm, nat], runners: [GHRunner(name: "m4-scoreview-ci", online: true, busy: true, labels: []),
+                                                                        GHRunner(name: "mac-mini-m4", online: true, busy: false, labels: [])],
+                                        jobs: [job], now: now)
+        XCTAssertEqual(snap.runners.map(\.id), ["m4-scoreview-ci", "mac-mini-m4"])
+        XCTAssertEqual(snap.runners[0].job?.id, 1); XCTAssertEqual(snap.runners[0].cpus, 6)
+        XCTAssertEqual(snap.runners[1].cpus, 10); XCTAssertEqual(snap.runners[1].memoryGB, 16, accuracy: 0.001); XCTAssertTrue(snap.runners[1].native)
     }
 }
 
-final class VMSnapshotParserTests: XCTestCase {
-    func testParse() {
+final class SnapshotParserTests: XCTestCase {
+    func testParseVM() {
         let out = """
         cpu  200 0 200 1400 200 0 0 0 0 0
         ---
@@ -105,19 +110,47 @@ final class VMSnapshotParserTests: XCTestCase {
         MemAvailable:    3145728 kB
         ---
         1000
+        H|colima
         R|/home/u/actions-runner-hoci|colima-scoreview-ci|https://github.com/rsutcliffe/hoci|1|940
         R|/home/u/actions-runner|colima-tenantsafe-ci|https://github.com/rsutcliffe/TenantShield|0|none
 
         """
         let prev = ProcParser.cpuTimes(fromStatLine: "cpu  100 0 100 700 100 0 0 0 0 0")
-        let (snap, _) = VMSnapshotParser.parse(out, prevCPU: prev)!
+        let (snap, _) = SnapshotParser.parseVM(out, prevCPU: prev)!
         XCTAssertEqual(snap.cpuPercent, 20, accuracy: 0.01)
         XCTAssertEqual(snap.memUsedGB, 5, accuracy: 0.001)
+        XCTAssertEqual(snap.hostname, "colima")
         XCTAssertEqual(snap.runners.map(\.name), ["colima-scoreview-ci", "colima-tenantsafe-ci"])
-        XCTAssertEqual(snap.runners[0].repo, "hoci"); XCTAssertTrue(snap.runners[0].listenerRunning)
         XCTAssertEqual(snap.runners[0].lastOutputAt!.timeIntervalSinceNow, -60, accuracy: 2)
         XCTAssertNil(snap.runners[1].lastOutputAt); XCTAssertFalse(snap.runners[1].listenerRunning)
-        XCTAssertNil(VMSnapshotParser.ownerRepo(fromURL: "https://github.com/a;b/c"))
+        XCTAssertNil(SnapshotParser.ownerRepo(fromURL: "https://github.com/a;b/c"))
+    }
+    func testParseNative() {
+        let out = """
+        H|mac-mini.local
+        D|2000
+        N|10|17179869184
+        C|45.5
+        M|8589934592
+        R|/Users/u/actions-runner|mac-mini-m4|https://github.com/rsutcliffe/CertsVault|1|1990
+
+        """
+        let s = SnapshotParser.parseNative(out)!
+        XCTAssertEqual(s.cpus, 10); XCTAssertEqual(s.memTotalGB!, 16, accuracy: 0.001)
+        XCTAssertEqual(s.memUsedGB, 8, accuracy: 0.001); XCTAssertEqual(s.cpuPercent, 45.5, accuracy: 0.01)
+        XCTAssertEqual(s.runners.first?.repo, "CertsVault")
+        XCTAssertNil(SnapshotParser.parseNative("NONE\n"))
+        XCTAssertEqual(SnapshotParser.shortName("mac-mini.local"), "mac-mini")
+    }
+}
+
+final class StaleRuleTests: XCTestCase {
+    func testHide() {
+        let now = Date()
+        XCTAssertTrue(StaleRule.isStale(state: .offline, lastActive: nil, now: now))
+        XCTAssertTrue(StaleRule.isStale(state: .offline, lastActive: now - 25 * 3600, now: now))
+        XCTAssertFalse(StaleRule.isStale(state: .offline, lastActive: now - 3600, now: now))     // just crashed: stay visible
+        XCTAssertFalse(StaleRule.isStale(state: .idle, lastActive: nil, now: now))
     }
 }
 
@@ -126,6 +159,8 @@ final class ConfigTests: XCTestCase {
         XCTAssertTrue(Config.isSafeName("arm-01")); XCTAssertFalse(Config.isSafeName("a;rm -rf /"))
         XCTAssertTrue(Config.isSafePath("~/actions-runner")); XCTAssertFalse(Config.isSafePath("~/a b; ls")); XCTAssertFalse(Config.isSafePath("../x"))
         XCTAssertEqual(Config.list("a, b c\nd"), ["a", "b", "c", "d"])
-        XCTAssertEqual(Config().profiles, ["default"])
+        XCTAssertEqual(Config().profiles, ["default"]); XCTAssertEqual(Config().hosts, ["local"])
+        XCTAssertTrue(Config.isSafeHost("192.0.2.10")); XCTAssertTrue(Config.isSafeHost("me@mac-mini.local"))
+        XCTAssertFalse(Config.isSafeHost("-oProxyCommand=x")); XCTAssertFalse(Config.isSafeHost("a b;c"))
     }
 }

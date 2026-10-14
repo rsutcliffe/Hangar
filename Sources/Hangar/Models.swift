@@ -47,8 +47,12 @@ struct Runner: Identifiable, Equatable, Sendable {
     var memUsedGB = 0.0
     var lastJobEndedAt: Date?
     var failedAt: Date?
+    var host = ""
 
-    var spec: String { "\(cpus) CPU · \(Format.gb(memoryGB))" }
+    var spec: String {
+        let hw = "\(cpus) CPU · \(Format.gb(memoryGB))"
+        return host.isEmpty ? hw : "\(host) · \(hw)"
+    }
     var cpuNow: Int { Int((cpuHistory.last ?? 0).rounded()) }
 }
 

@@ -10,6 +10,8 @@ struct RunnerObservation: Equatable, Sendable {
     var ghOnline: Bool
     var listenerRunning = true
     var busy: Bool
+    var host = ""
+    var native = false
     var job: ActiveJob?
     var cpuPercent: Double
     var memUsedGB: Double
@@ -49,5 +51,17 @@ enum StateRules {
                 ? .stalled : .running
         }
         return .idle
+    }
+}
+
+enum StaleRule {
+    static let window: TimeInterval = 24 * 3600
+
+    /// Hide a runner that is offline and has not been active for a day (or ever, since Hangar first saw it).
+    /// One that has just gone down stays visible so a crash is not hidden.
+    static func isStale(state: RunnerState, lastActive: Date?, now: Date) -> Bool {
+        guard state == .offline else { return false }
+        guard let last = lastActive else { return true }
+        return now.timeIntervalSince(last) > window
     }
 }

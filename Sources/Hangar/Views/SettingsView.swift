@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage(Config.Key.profiles) private var profiles = "default"
+    @AppStorage(Config.Key.hosts) private var hosts = "local"
     @AppStorage(Config.Key.stallMinutes) private var stallMinutes = 10
     @AppStorage(Config.Key.pollSeconds) private var pollSeconds = 15
     @State private var token = ""
@@ -16,6 +17,10 @@ struct SettingsView: View {
                     Button("Save token", action: saveToken).disabled(token.isEmpty)
                     Button("Remove token", role: .destructive) { Keychain.delete(); hasToken = false }.disabled(!hasToken)
                 }
+            }
+            Section("Hosts") {
+                TextField("One per line: local, or an SSH target", text: $hosts, axis: .vertical).lineLimit(2...5)
+                Text("SSH uses your existing key; Hangar never asks for a password.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Colima") {
                 TextField("Profiles (comma separated)", text: $profiles)
