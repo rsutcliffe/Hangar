@@ -5,10 +5,10 @@
       "color": {
         "color-space": "srgb",
         "components": {
-          "red": "1.0000",
-          "green": "1.0000",
-          "blue": "1.0000",
-          "alpha": "0.36"
+          "red": "0.1059",
+          "green": "0.1176",
+          "blue": "0.1333",
+          "alpha": "0.06"
         }
       }
     },
