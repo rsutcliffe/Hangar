@@ -8,6 +8,8 @@ enum GitHubError: Error, Equatable, LocalizedError {
         case .noToken: "No GitHub token set"
         case .unauthorized: "GitHub rejected the token"
         case .rateLimited: "GitHub rate limit reached"
+        case .http(403): "Token lacks permission (needs Actions and Administration: read)"
+        case .http(404): "Repo not found or token cannot see it"
         case .http(let c): "GitHub returned HTTP \(c)"
         case .badURL: "Invalid owner or repo name"
         }
@@ -47,16 +49,10 @@ actor GitHubService {
         }
     }
 
-    /// Org runners first; fall back to the first repo's runners for a user-owned account.
-    func runners(owner: String, repos: [String], token: String) async throws -> [GHRunner] {
-        guard Config.isSafeName(owner), repos.allSatisfy(Config.isSafeName) else { throw GitHubError.badURL }
-        var json: Any
-        do { json = try await get("/orgs/\(owner)/actions/runners?per_page=100", token: token) }
-        catch GitHubError.http(404) {
-            guard let r = repos.first else { return [] }
-            json = try await get("/repos/\(owner)/\(r)/actions/runners?per_page=100", token: token)
-        }
-        return Self.parseRunners(json)
+    /// Repo-level runners (needs Administration: read on the repo).
+    func runners(owner: String, repo: String, token: String) async throws -> [GHRunner] {
+        guard Config.isSafeName(owner), Config.isSafeName(repo) else { throw GitHubError.badURL }
+        return Self.parseRunners(try await get("/repos/\(owner)/\(repo)/actions/runners?per_page=100", token: token))
     }
 
     /// Recent runs for a repo, then the jobs for runs that matter (queued, running, recently failed).

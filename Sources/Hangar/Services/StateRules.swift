@@ -8,6 +8,7 @@ struct RunnerObservation: Equatable, Sendable {
     var memoryGB: Double
     var vmRunning: Bool
     var ghOnline: Bool
+    var listenerRunning = true
     var busy: Bool
     var job: ActiveJob?
     var cpuPercent: Double
@@ -37,10 +38,10 @@ enum StateRules {
                        now: Date, stallThreshold: TimeInterval) -> RunnerState {
         if let since = intent.restartingSince {
             // Restarting lasts until the VM and runner report online again (after at least one poll).
-            if !(o.vmRunning && o.ghOnline) || now.timeIntervalSince(since) < 1 { return .restarting }
+            if !(o.vmRunning && o.ghOnline && o.listenerRunning) || now.timeIntervalSince(since) < 1 { return .restarting }
         }
         if intent.paused { return .paused }
-        if !o.vmRunning || !o.ghOnline { return .offline }
+        if !o.vmRunning || !o.ghOnline || !o.listenerRunning { return .offline }
         if let job = o.job, job.failedStep != nil || job.exitCode != nil,
            let seen = failureSeenAt, now.timeIntervalSince(seen) < failedHold { return .failed }
         if o.busy, let job = o.job {

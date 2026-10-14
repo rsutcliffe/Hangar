@@ -78,18 +78,46 @@ final class GitHubParseTests: XCTestCase {
         let a = LiveBackend.activeJob(jobs[0], lastOutput: nil)
         XCTAssertEqual(a.currentStep, 2); XCTAssertEqual(a.totalSteps, 3)
     }
-    func testAssembleMatchesRunnerToProfile() {
-        var c = Config(); c.profiles = ["arm-01"]
+    func testAssembleMatchesRunnerByExactName() {
+        var c = Config(); c.profiles = ["default"]
         let now = Date()
-        let run = GitHubService.Run(id: 9, name: "build", number: 482, branch: "main", status: "in_progress", conclusion: nil, updatedAt: now)
-        let job = GHJob(id: 1, runId: 9, repo: "api", workflow: "build", runNumber: 482, branch: "main", status: "in_progress", conclusion: nil,
-                        labels: ["self-hosted"], runnerName: "arm-01-x", createdAt: now, startedAt: now, completedAt: nil,
+        let job = GHJob(id: 1, runId: 9, repo: "hoci", workflow: "build", runNumber: 482, branch: "main", status: "in_progress", conclusion: nil,
+                        labels: ["self-hosted"], runnerName: "colima-scoreview-ci", createdAt: now, startedAt: now, completedAt: nil,
                         steps: [.init(number: 1, status: "in_progress", conclusion: nil)])
-        _ = run
-        let snap = LiveBackend.assemble(config: c, vms: ["arm-01": VMInfo(running: true, arch: .arm64, cpus: 4, memoryGB: 8)],
-                                        samples: [:], runners: [GHRunner(name: "arm-01-x", online: true, busy: true, labels: [])], jobs: [job], now: now)
-        XCTAssertEqual(snap.runners.first?.job?.id, 1)
-        XCTAssertTrue(snap.runners.first?.busy ?? false)
+        let facts = [RunnerFacts(dir: "/h/actions-runner-hoci", name: "colima-scoreview-ci", owner: "rsutcliffe", repo: "hoci", listenerRunning: true, lastOutputAt: now),
+                     RunnerFacts(dir: "/h/actions-runner", name: "colima-tenantsafe-ci", owner: "rsutcliffe", repo: "TenantShield", listenerRunning: false, lastOutputAt: nil)]
+        let snap = LiveBackend.assemble(config: c, vms: ["default": VMInfo(running: true, arch: .arm64, cpus: 6, memoryGB: 8)],
+                                        snaps: ["default": VMSnapshot(cpuPercent: 12, memUsedGB: 3, runners: facts)],
+                                        runners: [GHRunner(name: "colima-scoreview-ci", online: true, busy: true, labels: [])], jobs: [job], now: now)
+        XCTAssertEqual(snap.runners.map(\.id), ["colima-scoreview-ci", "colima-tenantsafe-ci"])
+        XCTAssertEqual(snap.runners[0].job?.id, 1)
+        XCTAssertFalse(snap.runners[1].listenerRunning)
+        XCTAssertNil(snap.runners[1].job)
+    }
+}
+
+final class VMSnapshotParserTests: XCTestCase {
+    func testParse() {
+        let out = """
+        cpu  200 0 200 1400 200 0 0 0 0 0
+        ---
+        MemTotal:        8388608 kB
+        MemAvailable:    3145728 kB
+        ---
+        1000
+        R|/home/u/actions-runner-hoci|colima-scoreview-ci|https://github.com/rsutcliffe/hoci|1|940
+        R|/home/u/actions-runner|colima-tenantsafe-ci|https://github.com/rsutcliffe/TenantShield|0|none
+
+        """
+        let prev = ProcParser.cpuTimes(fromStatLine: "cpu  100 0 100 700 100 0 0 0 0 0")
+        let (snap, _) = VMSnapshotParser.parse(out, prevCPU: prev)!
+        XCTAssertEqual(snap.cpuPercent, 20, accuracy: 0.01)
+        XCTAssertEqual(snap.memUsedGB, 5, accuracy: 0.001)
+        XCTAssertEqual(snap.runners.map(\.name), ["colima-scoreview-ci", "colima-tenantsafe-ci"])
+        XCTAssertEqual(snap.runners[0].repo, "hoci"); XCTAssertTrue(snap.runners[0].listenerRunning)
+        XCTAssertEqual(snap.runners[0].lastOutputAt!.timeIntervalSinceNow, -60, accuracy: 2)
+        XCTAssertNil(snap.runners[1].lastOutputAt); XCTAssertFalse(snap.runners[1].listenerRunning)
+        XCTAssertNil(VMSnapshotParser.ownerRepo(fromURL: "https://github.com/a;b/c"))
     }
 }
 
@@ -98,5 +126,6 @@ final class ConfigTests: XCTestCase {
         XCTAssertTrue(Config.isSafeName("arm-01")); XCTAssertFalse(Config.isSafeName("a;rm -rf /"))
         XCTAssertTrue(Config.isSafePath("~/actions-runner")); XCTAssertFalse(Config.isSafePath("~/a b; ls")); XCTAssertFalse(Config.isSafePath("../x"))
         XCTAssertEqual(Config.list("a, b c\nd"), ["a", "b", "c", "d"])
+        XCTAssertEqual(Config().profiles, ["default"])
     }
 }

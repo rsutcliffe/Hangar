@@ -94,7 +94,7 @@ final class MonitorStore {
         setState(id, .restarting)
         let config = Config.load()
         Task {
-            try? await backend.restart(id, config: config)
+            await run { try await backend.restart(id, config: config) }
             await refresh()
         }
     }
@@ -106,7 +106,7 @@ final class MonitorStore {
         if i.draining || i.paused {
             i.draining = false; i.paused = false
             intents[id] = i
-            Task { try? await backend.setRunnerService(id, running: true, config: config); await refresh() }
+            Task { await run { try await backend.setRunnerService(id, running: true, config: config) }; await refresh() }
         } else {
             i.draining = true
             if r.state == .idle { i.paused = true; stopService(id, config: config) }
@@ -117,7 +117,16 @@ final class MonitorStore {
     }
 
     private func stopService(_ id: String, config: Config) {
-        Task { try? await backend.setRunnerService(id, running: false, config: config) }
+        Task { await run { try await backend.setRunnerService(id, running: false, config: config) } }
+    }
+
+    /// Runs a side effect and shows the failure in the window instead of swallowing it.
+    private func run(_ op: () async throws -> Void) async {
+        do { try await op() } catch {
+            if case ShellError.failed(_, let msg) = error {
+                errorMessage = msg.split(separator: "\n").last.map(String.init) ?? "Command failed"
+            } else { errorMessage = (error as? LocalizedError)?.errorDescription ?? "Command failed" }
+        }
     }
 
     private func setState(_ id: String, _ s: RunnerState, draining: Bool? = nil) {

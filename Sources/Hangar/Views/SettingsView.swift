@@ -1,10 +1,7 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @AppStorage(Config.Key.owner) private var owner = ""
-    @AppStorage(Config.Key.repos) private var repos = ""
-    @AppStorage(Config.Key.profiles) private var profiles = ""
-    @AppStorage(Config.Key.runnerDir) private var runnerDir = "~/actions-runner"
+    @AppStorage(Config.Key.profiles) private var profiles = "default"
     @AppStorage(Config.Key.stallMinutes) private var stallMinutes = 10
     @AppStorage(Config.Key.pollSeconds) private var pollSeconds = 15
     @State private var token = ""
@@ -12,10 +9,8 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("GitHub") {
-                TextField("Org or user", text: $owner)
-                TextField("Repos (comma separated)", text: $repos)
-                SecureField(hasToken ? "Token saved in Keychain (enter to replace)" : "Fine-grained token (actions:read)", text: $token)
+            Section("GitHub (repos are discovered from the runners)") {
+                SecureField(hasToken ? "Token saved in Keychain (enter to replace)" : "Token: Actions + Administration read", text: $token)
                     .onSubmit(saveToken)
                 HStack {
                     Button("Save token", action: saveToken).disabled(token.isEmpty)
@@ -24,7 +19,6 @@ struct SettingsView: View {
             }
             Section("Colima") {
                 TextField("Profiles (comma separated)", text: $profiles)
-                TextField("Runner directory in VM", text: $runnerDir)
             }
             Section("Monitoring") {
                 Stepper("Stall after \(stallMinutes) min", value: $stallMinutes, in: 1...120)

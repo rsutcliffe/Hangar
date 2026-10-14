@@ -17,57 +17,79 @@ enum BackendError: Error, LocalizedError {
     var errorDescription: String? { "Open Settings (⌘,) to add your org, repos and Colima profiles" }
 }
 
-struct LiveBackend: MonitorBackend {
-    let github = GitHubService()
-    let colima = ColimaService()
+final class LiveBackend: MonitorBackend, @unchecked Sendable {
+    private let github = GitHubService()
+    private let colima = ColimaService()
+    private let lock = NSLock()
+    private var located: [String: (profile: String, dir: String)] = [:]    // runner name -> where it lives
 
     func poll(config: Config) async throws -> BackendSnapshot {
         guard config.isConfigured else { throw BackendError.notConfigured }
         guard let token = Keychain.read() else { throw GitHubError.noToken }
         let vms = try await colima.list()
 
-        async let ghRunners = github.runners(owner: config.owner, repos: config.repos, token: token)
-        async let ghJobs = withThrowingTaskGroup(of: [GHJob].self) { group in
-            for r in config.repos { group.addTask { try await github.jobs(owner: config.owner, repo: r, token: token) } }
-            var all: [GHJob] = []
-            for try await jobs in group { all += jobs }
-            return all
+        var snaps: [String: VMSnapshot] = [:]
+        for p in config.profiles where vms[p]?.running == true { snaps[p] = try? await colima.snapshot(profile: p) }
+        var map: [String: (profile: String, dir: String)] = [:]
+        for (p, s) in snaps { for r in s.runners { map[r.name] = (p, r.dir) } }
+        lock.withLock { located = map }
+
+        let repos = Set(snaps.values.flatMap { $0.runners }.map { RepoRef(owner: $0.owner, repo: $0.repo) })
+        let github = self.github
+        let (runners, jobs) = try await withThrowingTaskGroup(of: ([GHRunner], [GHJob]).self) { group in
+            for r in repos {
+                group.addTask {
+                    async let rs = github.runners(owner: r.owner, repo: r.repo, token: token)
+                    async let js = github.jobs(owner: r.owner, repo: r.repo, token: token)
+                    return try await (rs, js)
+                }
+            }
+            var allR: [GHRunner] = [], allJ: [GHJob] = []
+            for try await (rs, js) in group { allR += rs; allJ += js }
+            return (allR, allJ)
         }
-        var samples: [String: VMSample] = [:]
-        for p in config.profiles where vms[p]?.running == true {
-            samples[p] = try? await colima.sample(profile: p, runnerDir: config.runnerDir)
-        }
-        let (runners, jobs) = try await (ghRunners, ghJobs)
-        return Self.assemble(config: config, vms: vms, samples: samples, runners: runners, jobs: jobs, now: Date())
+        return Self.assemble(config: config, vms: vms, snaps: snaps, runners: runners, jobs: jobs, now: Date())
+    }
+
+    private func place(_ id: String) throws -> (profile: String, dir: String) {
+        guard let p = lock.withLock({ located[id] }) else { throw ShellError.failed(2, "Runner \(id) not found in VM") }
+        return p
     }
 
     func restart(_ id: String, config: Config) async throws {
-        try await colima.restart(profile: id)
-        try await colima.setRunnerService(profile: id, runnerDir: config.runnerDir, running: true)
+        let p = try place(id)
+        try await colima.restartRunner(profile: p.profile, dir: p.dir)
     }
 
     func setRunnerService(_ id: String, running: Bool, config: Config) async throws {
-        try await colima.setRunnerService(profile: id, runnerDir: config.runnerDir, running: running)
+        let p = try place(id)
+        try await colima.setRunnerService(profile: p.profile, dir: p.dir, running: running)
     }
 
+    struct RepoRef: Hashable, Sendable { var owner: String; var repo: String }
+
     /// Pure join of the three sources; unit-tested.
-    static func assemble(config: Config, vms: [String: VMInfo], samples: [String: VMSample],
+    static func assemble(config: Config, vms: [String: VMInfo], snaps: [String: VMSnapshot],
                          runners: [GHRunner], jobs: [GHJob], now: Date) -> BackendSnapshot {
-        let obs = config.profiles.map { p -> RunnerObservation in
-            let vm = vms[p]
-            let gh = runners.first { $0.name.contains(p) }
-            let mine = jobs.filter { gh != nil && $0.runnerName == gh?.name }
-            var job: ActiveJob?
-            if let j = mine.first(where: { $0.status == "in_progress" }) {
-                job = activeJob(j, lastOutput: samples[p]?.lastOutputAt)
-            } else if let j = mine.filter({ $0.conclusion == "failure" && now.timeIntervalSince($0.completedAt ?? .distantPast) < 600 })
-                        .max(by: { ($0.completedAt ?? .distantPast) < ($1.completedAt ?? .distantPast) }) {
-                job = activeJob(j, lastOutput: j.completedAt)
+        var obs: [RunnerObservation] = []
+        for profile in config.profiles {
+            guard let snap = snaps[profile] else { continue }
+            let vm = vms[profile]
+            for f in snap.runners {
+                let gh = runners.first { $0.name == f.name }
+                let mine = jobs.filter { gh != nil && $0.runnerName == f.name }
+                var job: ActiveJob?
+                if let j = mine.first(where: { $0.status == "in_progress" }) {
+                    job = activeJob(j, lastOutput: f.lastOutputAt)
+                } else if let j = mine.filter({ $0.conclusion == "failure" && now.timeIntervalSince($0.completedAt ?? .distantPast) < 600 })
+                            .max(by: { ($0.completedAt ?? .distantPast) < ($1.completedAt ?? .distantPast) }) {
+                    job = activeJob(j, lastOutput: j.completedAt)
+                }
+                obs.append(RunnerObservation(id: f.name, arch: vm?.arch ?? .arm64, cpus: vm?.cpus ?? 0, memoryGB: vm?.memoryGB ?? 0,
+                                             vmRunning: vm?.running ?? false, ghOnline: gh?.online ?? false,
+                                             listenerRunning: f.listenerRunning, busy: gh?.busy ?? false,
+                                             job: job, cpuPercent: snap.cpuPercent, memUsedGB: snap.memUsedGB, lastJobEndedAt: nil))
             }
-            return RunnerObservation(id: p, arch: vm?.arch ?? .arm64, cpus: vm?.cpus ?? 0, memoryGB: vm?.memoryGB ?? 0,
-                                     vmRunning: vm?.running ?? false, ghOnline: gh?.online ?? false, busy: gh?.busy ?? false,
-                                     job: job, cpuPercent: samples[p]?.cpuPercent ?? 0, memUsedGB: samples[p]?.memUsedGB ?? 0,
-                                     lastJobEndedAt: nil)
         }
         return BackendSnapshot(runners: obs, queue: queue(from: jobs))
     }
