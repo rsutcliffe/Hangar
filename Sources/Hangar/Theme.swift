@@ -14,6 +14,8 @@ enum Theme {
     static let problemText = Color("ProblemText")
     static let onProblem = Color("OnProblem")
 
+    /// Follows the system window corner (concentric with the window); 26pt only if the system gives none.
+    static let windowShape = ConcentricRectangle(corners: .concentric(minimum: .fixed(windowRadius)), isUniform: true)
     static let windowRadius: CGFloat = 26
     static let cardRadius: CGFloat = 18
 }

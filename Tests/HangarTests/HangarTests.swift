@@ -164,3 +164,16 @@ final class ConfigTests: XCTestCase {
         XCTAssertFalse(Config.isSafeHost("-oProxyCommand=x")); XCTAssertFalse(Config.isSafeHost("a b;c"))
     }
 }
+
+final class AccessibilityTests: XCTestCase {
+    func testSummary() {
+        let now = Date()
+        let job = ActiveJob(id: 1, repo: "web", workflow: "test", runNumber: 1190, branch: "main", totalSteps: 7, currentStep: 3,
+                            startedAt: now - 1500, lastOutputAt: now - 840)
+        var r = Runner(id: "arm-02", arch: .arm64, cpus: 4, memoryGB: 8, state: .stalled, job: job)
+        XCTAssertEqual(r.accessibilitySummary(now: now), "arm-02, Stalled, test · web #1190, no output for 14m")
+        r.state = .running; r.job?.lastOutputAt = now
+        XCTAssertEqual(r.accessibilitySummary(now: now), "arm-02, Running, test · web #1190, step 3 of 7, 42 percent")
+        XCTAssertEqual(Runner(id: "x", arch: .x86, cpus: 2, memoryGB: 4, state: .offline).accessibilitySummary(now: now), "x, Offline")
+    }
+}

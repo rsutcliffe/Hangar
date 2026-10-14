@@ -3,8 +3,11 @@ import SwiftUI
 struct MonitorWindow: View {
     @Bindable var store: MonitorStore
     @Environment(\.scenePhase) private var phase
+    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
+        // Scrolls only when the runners would not fit on screen; otherwise the window hugs its content.
+        ScrollView(.vertical) {
         TimelineView(.periodic(from: .now, by: 30)) { ctx in
             GlassEffectContainer(spacing: 10) {
                 VStack(spacing: 12) {
@@ -23,18 +26,26 @@ struct MonitorWindow: View {
                 .padding(.horizontal, 14).padding(.bottom, 14)
             }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+        }
+        .scrollIndicators(.hidden)
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(height: contentHeight > 0 ? min(contentHeight, maxContentHeight) : nil)
         .foregroundStyle(Theme.text)
         .frame(width: 644)
         .background {
             ZStack {
-                RoundedRectangle(cornerRadius: Theme.windowRadius).fill(Theme.glassFill)
-                Color.clear.glassEffect(.regular, in: .rect(cornerRadius: Theme.windowRadius))
+                Theme.windowShape.fill(Theme.glassFill)
+                Color.clear.glassEffect(.regular, in: Theme.windowShape)
             }
             .ignoresSafeArea()
         }
         .background(WindowChrome())
         .onChange(of: phase) { _, p in store.windowVisible = (p == .active) }
     }
+
+    /// Leave room for the title bar and Dock; beyond this the runner list scrolls.
+    private var maxContentHeight: CGFloat { (NSScreen.main?.visibleFrame.height ?? 800) - 52 }
 
     private var header: some View {
         HStack {

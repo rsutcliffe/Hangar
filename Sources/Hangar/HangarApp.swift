@@ -23,6 +23,12 @@ struct HangarApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
+        .commands {
+            CommandGroup(before: .toolbar) {
+                Button("Refresh Now") { Task { await store.refresh() } }
+                    .keyboardShortcut("r")
+            }
+        }
         Settings { SettingsView() }
     }
 }

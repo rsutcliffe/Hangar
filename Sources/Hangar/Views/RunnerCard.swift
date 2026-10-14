@@ -59,11 +59,14 @@ struct RunnerCard: View {
                     if problem {
                         Button(action: onRestart) { Text("Restart").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.onProblem) }
                             .buttonStyle(.glassProminent).tint(Theme.problem)
+                            .accessibilityLabel("Restart \(runner.id)")
                     } else {
                         Button(action: onRestart) { Text("Restart").font(.system(size: 12)) }.buttonStyle(.glass)
+                            .accessibilityLabel("Restart \(runner.id)")
                     }
                     Button(action: onDrain) { Text(runner.draining || s == .paused ? "Resume" : "Drain").font(.system(size: 12)) }
                         .buttonStyle(.glass)
+                        .accessibilityLabel("\(runner.draining || s == .paused ? "Resume" : "Drain") \(runner.id)")
                 }
                 .disabled(busy).opacity(busy ? 0.45 : 1)
             }
@@ -73,7 +76,8 @@ struct RunnerCard: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: Theme.cardRadius))
         .overlay { if problem { RoundedRectangle(cornerRadius: Theme.cardRadius).strokeBorder(Theme.problem, lineWidth: 1.5) } }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(runner.accessibilitySummary(now: now))
     }
 
     private var figure: String {
@@ -139,5 +143,8 @@ struct ProgressBar: View {
         }
         .frame(height: 5)
         .clipShape(RoundedRectangle(cornerRadius: 3))
+        .accessibilityElement()
+        .accessibilityLabel("Progress")
+        .accessibilityValue("\(Int(min(1, max(0, value)) * 100)) percent")
     }
 }

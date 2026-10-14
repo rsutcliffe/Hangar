@@ -70,3 +70,35 @@ struct QueuedJob: Identifiable, Equatable, Sendable {
 extension [QueuedJob] {
     func count(for arch: Arch) -> Int { filter { $0.arch == arch }.count }
 }
+
+extension Runner {
+    /// One spoken line for VoiceOver: "arm-02, Stalled, test · web #1190, no output for 14m".
+    func accessibilitySummary(now: Date) -> String {
+        var parts = [id, state.spoken]
+        if let j = job {
+            parts.append(j.title)
+            switch state {
+            case .stalled: parts.append("no output for \(Format.duration(now.timeIntervalSince(j.lastOutputAt)))")
+            case .failed: parts.append("failed at step \(j.failedStep ?? j.currentStep)")
+            case .running: parts.append("step \(j.currentStep) of \(j.totalSteps), \(Int(j.progress * 100)) percent")
+            default: break
+            }
+        }
+        if draining { parts.append("draining") }
+        return parts.joined(separator: ", ")
+    }
+}
+
+extension RunnerState {
+    var spoken: String {
+        switch self {
+        case .running: "Running"
+        case .stalled: "Stalled"
+        case .failed: "Failed"
+        case .restarting: "Restarting"
+        case .idle: "Idle"
+        case .paused: "Paused"
+        case .offline: "Offline"
+        }
+    }
+}
