@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/icon.png" width="128" alt="Hangar app icon"></p>
+
 # Hangar
 
 A small macOS app (SwiftUI, Liquid Glass, macOS 26+) that shows the state of self-hosted GitHub Actions runners running in Colima VMs: runner and VM health, current job and step progress, CPU and memory load, stalls and failures, and the shared job queue. Stalls and failures raise a macOS notification. Each runner can be restarted or drained from the window.
