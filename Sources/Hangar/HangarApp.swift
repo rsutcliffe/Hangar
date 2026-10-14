@@ -7,6 +7,8 @@ struct HangarApp: App {
     init() {
         let args = CommandLine.arguments
         let demo = args.contains("--demo")
+        if args.contains("--light") { NSApplication.shared.appearance = NSAppearance(named: .aqua) }     // for checking Light mode
+        if args.contains("--dark") { NSApplication.shared.appearance = NSAppearance(named: .darkAqua) }
         let scenario = args.contains("--scenario-failed") ? DemoBackend.Scenario.failed : .stalled
         let backend: MonitorBackend = demo ? DemoBackend(scenario: scenario) : LiveBackend()
         let s = MonitorStore(backend: backend)

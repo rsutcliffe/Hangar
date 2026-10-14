@@ -18,6 +18,10 @@ struct MonitorWindow: View {
                                        onRestart: { store.restart(r.id) }, onDrain: { store.toggleDrain(r.id) })
                         }
                     }
+                    if store.notificationsOff {
+                        Text("Notifications are off for Hangar: stalls and failures won't alert you. Enable them in System Settings ▸ Notifications.")
+                            .font(.system(size: 11)).foregroundStyle(Theme.problemText).frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     if let e = store.errorMessage {
                         Text(e).font(.system(size: 11)).foregroundStyle(Theme.problemText).frame(maxWidth: .infinity, alignment: .leading)
                     }

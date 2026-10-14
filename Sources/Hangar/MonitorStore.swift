@@ -7,6 +7,7 @@ final class MonitorStore {
     private(set) var queue: [QueuedJob] = []
     private(set) var lastUpdated: Date?
     private(set) var errorMessage: String?
+    private(set) var notificationsOff = false
 
     private let backend: MonitorBackend
     private let notifier = NotificationService()
@@ -24,7 +25,7 @@ final class MonitorStore {
     init(backend: MonitorBackend) { self.backend = backend }
 
     func start(demoAction: ((MonitorStore) -> Void)? = nil) {
-        notifier.requestAuthorization()
+        notifier.requestAuthorization { [weak self] in self?.notificationsOff = true }
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             var first = true

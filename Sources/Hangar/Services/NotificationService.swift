@@ -3,12 +3,22 @@ import UserNotifications
 
 /// One notification per (job, event). Copy matches the handover README exactly.
 @MainActor
-final class NotificationService {
+final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     enum Event: String { case stalled, failed }
     private var sent: Set<String> = []
 
-    func requestAuthorization() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    /// Asks once; `onDenied` runs on the main actor if the user has turned Hangar's notifications off.
+    func requestAuthorization(onDenied: @escaping @MainActor () -> Void) {
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            if !granted { Task { @MainActor in onDenied() } }
+        }
+    }
+
+    /// Without this, macOS silently drops notifications while Hangar is the frontmost app.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner, .list, .sound]
     }
 
     /// Returns true if it was new (not previously sent).

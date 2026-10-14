@@ -22,7 +22,7 @@ The GitHub token (fine-grained, `actions:read`) is stored in the macOS Keychain 
 
 ## Demo mode
 
-`Hangar --demo` shows scripted data with no token or VMs. Extra flags: `--scenario-failed`, `--scenario-restarting`, `--scenario-paused`.
+`Hangar --demo` shows scripted data with no token or VMs. Extra flags: `--scenario-failed`, `--scenario-restarting`, `--scenario-paused`, and `--light` / `--dark` to force an appearance.
 
 ## Tests
 
