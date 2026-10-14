@@ -3,7 +3,7 @@ import Foundation
 enum RunnerState: String, Equatable, Sendable {
     case running, stalled, failed, restarting, idle, paused, offline
 
-    /// Stalled or failed: needs the user, so it is shown in amber.
+    /// Stalled or failed: needs the user, so it is shown in red.
     var isProblem: Bool { self == .stalled || self == .failed }
 }
 

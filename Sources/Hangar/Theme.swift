@@ -9,7 +9,8 @@ enum Theme {
     static let glassFill = Color("GlassFill")   // body tint under the window glass
     static let pill = Color("Pill")
     static let pillHover = Color("PillHover")
-    static let running = Color("Running")
+    /// The user's system accent colour (System Settings ▸ Appearance ▸ Theme), not a fixed blue.
+    static let running = Color.accentColor
     static let problem = Color("Problem")
     static let problemText = Color("ProblemText")
     static let onProblem = Color("OnProblem")

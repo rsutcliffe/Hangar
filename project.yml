@@ -27,7 +27,6 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Hangar
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Hangar connects to your other Macs over SSH to read their CI runner status.
-        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
   HangarTests:
     type: bundle.unit-test
     platform: macOS
