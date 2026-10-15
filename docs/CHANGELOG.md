@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.2 - 2026-10-15
+
+- Failed jobs are now remembered: the Capacity window lists recent failures with the runner, the job and the step that failed, and each one opens the job on GitHub. The last 200 failures from the past 30 days are kept on your Mac, as names and times only.
+
 ## 0.1.1 - 2026-10-15
 
 - Capacity and Settings links at the bottom of the window open the capacity history and Settings, so they no longer have to be found in the menus.
