@@ -764,3 +764,171 @@ final class JobHistoryTests: XCTestCase {
         for bad in ["token", "http", "Bearer", "log"] { XCTAssertFalse(json.contains(bad)) }
     }
 }
+
+// MARK: - Live-path tests: recorded (anonymised) GitHub responses through the real client, and the poll loop with a fake backend
+
+final class StubURLProtocol: URLProtocol, @unchecked Sendable {
+    struct Reply { var status = 200; var headers: [String: String] = [:]; var body = "{}" }
+    nonisolated(unsafe) static var replies: [String: Reply] = [:]          // "path?query" -> reply
+    nonisolated(unsafe) static var seen: [URLRequest] = []
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Self.seen.append(request)
+        let url = request.url!
+        let key = url.path + (url.query.map { "?" + $0 } ?? "")
+        let r = Self.replies[key] ?? Reply(status: 404, body: #"{"message":"Not Found"}"#)
+        let resp = HTTPURLResponse(url: url, statusCode: r.status, httpVersion: "HTTP/1.1", headerFields: r.headers)!
+        client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(r.body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+
+    static func session() -> URLSession {
+        let c = URLSessionConfiguration.ephemeral
+        c.protocolClasses = [StubURLProtocol.self]
+        return URLSession(configuration: c)
+    }
+}
+
+final class GitHubClientTests: XCTestCase {
+    override func setUp() { StubURLProtocol.replies = [:]; StubURLProtocol.seen = [] }
+
+    func testRunnersAndJobsThroughTheRealClient() async throws {
+        StubURLProtocol.replies["/repos/example-org/widgets/actions/runners?per_page=100"] = .init(
+            headers: ["GitHub-Authentication-Token-Expiration": "2027-01-12 14:14:01 UTC"],
+            body: #"{"total_count":2,"runners":[{"name":"runner-a","status":"online","busy":true,"labels":[{"name":"self-hosted"},{"name":"ARM64"}]},{"name":"runner-b","status":"offline","busy":false,"labels":[{"name":"self-hosted"},{"name":"macbook-standby"}]}]}"#)
+        StubURLProtocol.replies["/repos/example-org/widgets/actions/runs?per_page=20"] = .init(
+            body: #"{"workflow_runs":[{"id":7,"name":"CI","run_number":12,"head_branch":"main","status":"in_progress","updated_at":"2026-10-14T10:00:00Z"},{"id":6,"name":"CI","run_number":11,"head_branch":"main","status":"completed","conclusion":"success","updated_at":"2026-10-14T09:00:00Z"}]}"#)
+        StubURLProtocol.replies["/repos/example-org/widgets/actions/runs/7/jobs?per_page=100"] = .init(
+            body: #"{"jobs":[{"id":70,"name":"unit","status":"in_progress","labels":["self-hosted","ARM64"],"runner_name":"runner-a","created_at":"2026-10-14T09:50:00Z","started_at":"2026-10-14T09:51:00Z","html_url":"https://github.com/example-org/widgets/actions/runs/7/job/70","steps":[{"number":1,"name":"Checkout","status":"completed","conclusion":"success"},{"number":2,"name":"Test","status":"in_progress"}]}]}"#)
+        let gh = GitHubService(session: StubURLProtocol.session())
+
+        let runners = try await gh.runners(owner: "example-org", repo: "widgets", token: "test-token")
+        XCTAssertEqual(runners.map(\.name), ["runner-a", "runner-b"])
+        XCTAssertTrue(runners[1].isStandby); XCTAssertTrue(runners[0].busy)
+
+        let jobs = try await gh.jobs(owner: "example-org", repo: "widgets", token: "test-token", now: Date(timeIntervalSince1970: 1_792_000_000))
+        XCTAssertEqual(jobs.count, 1)                                  // the completed success run is not fetched
+        XCTAssertEqual(jobs[0].steps.map(\.name), ["Checkout", "Test"])
+        XCTAssertEqual(GitHubLink.safe(jobs[0].htmlURL)?.host, "github.com")
+
+        let exp = await gh.tokenExpiry()
+        XCTAssertNotNil(exp)
+        // The token goes only in the Authorization header, never in the URL.
+        XCTAssertTrue(StubURLProtocol.seen.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer test-token" })
+        XCTAssertTrue(StubURLProtocol.seen.allSatisfy { !($0.url!.absoluteString.contains("test-token")) })
+    }
+
+    func testStatusCodesMapToHelpfulErrors() async {
+        let gh = GitHubService(session: StubURLProtocol.session())
+        let path = "/repos/example-org/widgets/actions/runners?per_page=100"
+        for (status, expect) in [(401, "rejected"), (403, "permission"), (404, "not found")] {
+            StubURLProtocol.replies[path] = .init(status: status, body: "{}")
+            do { _ = try await gh.runners(owner: "example-org", repo: "widgets", token: "t"); XCTFail("expected an error") }
+            catch { XCTAssertTrue(((error as? LocalizedError)?.errorDescription ?? "").lowercased().contains(expect), "status \(status)") }
+        }
+    }
+
+    func testRateLimitCarriesTheWaitFromTheHeaders() async {
+        let gh = GitHubService(session: StubURLProtocol.session())
+        let reset = Int(Date().timeIntervalSince1970) + 120
+        StubURLProtocol.replies["/repos/example-org/widgets/actions/runners?per_page=100"] = .init(
+            status: 403, headers: ["x-ratelimit-remaining": "0", "x-ratelimit-reset": "\(reset)"], body: "{}")
+        do { _ = try await gh.runners(owner: "example-org", repo: "widgets", token: "t"); XCTFail("expected a rate limit") }
+        catch GitHubError.rateLimited(let until) {
+            let wait = until!.timeIntervalSinceNow
+            XCTAssertTrue(wait > 100 && wait <= 121, "wait was \(wait)")
+        } catch { XCTFail("wrong error \(error)") }
+    }
+
+    func testLatestRunnerVersionIsCachedAndSendsNoToken() async {
+        StubURLProtocol.replies["/repos/actions/runner/releases/latest"] = .init(body: #"{"tag_name":"v2.338.0"}"#)
+        let gh = GitHubService(session: StubURLProtocol.session())
+        let a = await gh.latestRunnerVersion(), b = await gh.latestRunnerVersion()
+        XCTAssertEqual(a, "2.338.0"); XCTAssertEqual(b, "2.338.0")
+        XCTAssertEqual(StubURLProtocol.seen.count, 1)                       // second call served from the cache
+        XCTAssertNil(StubURLProtocol.seen[0].value(forHTTPHeaderField: "Authorization"))
+    }
+
+    func testAnUnreadableLatestVersionIsIgnored() async {
+        StubURLProtocol.replies["/repos/actions/runner/releases/latest"] = .init(body: #"{"tag_name":"nightly"}"#)
+        let v = await GitHubService(session: StubURLProtocol.session()).latestRunnerVersion()
+        XCTAssertNil(v)
+    }
+}
+
+final class FakeBackend: MonitorBackend, @unchecked Sendable {
+    nonisolated(unsafe) var script: [Result<BackendSnapshot, Error>]
+    nonisolated(unsafe) private(set) var polls = 0
+    init(_ script: [Result<BackendSnapshot, Error>]) { self.script = script }
+    func poll(config: Config) async throws -> BackendSnapshot {
+        polls += 1
+        let r = script.isEmpty ? .failure(URLError(.badServerResponse)) : script.removeFirst()
+        return try r.get()
+    }
+    func restart(_ id: String, config: Config) async throws {}
+    func setRunnerService(_ id: String, running: Bool, config: Config) async throws {}
+    func diagnose(config: Config) async -> ConnectionReport { ConnectionReport() }
+}
+
+@MainActor
+final class PollLoopTests: XCTestCase {
+    func snapshot(_ ids: [String] = ["runner-a"]) -> BackendSnapshot {
+        BackendSnapshot(runners: ids.map {
+            RunnerObservation(id: $0, arch: .arm64, cpus: 2, memoryGB: 4, vmRunning: true, ghOnline: true, busy: false,
+                              job: nil, cpuPercent: 3, memUsedGB: 1, lastJobEndedAt: nil)
+        }, queue: [])
+    }
+    func store(_ b: FakeBackend) -> MonitorStore { let s = MonitorStore(backend: b); s.recordHistory = false; return s }
+
+    func testSuccessThenFailuresGoStaleThenRecover() async {
+        let b = FakeBackend([.success(snapshot()), .failure(GitHubError.http(500)), .failure(GitHubError.http(500)), .failure(GitHubError.http(500)),
+                             .success(snapshot())])
+        let s = store(b)
+        await s.refresh()
+        XCTAssertEqual(s.runners.map(\.id), ["runner-a"]); XCTAssertNotNil(s.lastSuccess); XCTAssertFalse(s.isStale())
+        for _ in 0..<2 { await s.refresh() }
+        XCTAssertEqual(s.consecutiveFailures, 2); XCTAssertFalse(s.isStale())
+        XCTAssertEqual(s.runners.map(\.id), ["runner-a"], "old data stays visible while polls fail")
+        await s.refresh()
+        XCTAssertEqual(s.consecutiveFailures, 3); XCTAssertTrue(s.isStale())
+        await s.refresh()
+        XCTAssertEqual(s.consecutiveFailures, 0); XCTAssertFalse(s.isStale()); XCTAssertNil(s.errorMessage)
+    }
+
+    func testABriefNetworkErrorIsRetriedOnce() async {
+        let b = FakeBackend([.failure(URLError(.timedOut)), .success(snapshot())])
+        let s = store(b)
+        await s.refresh()
+        XCTAssertEqual(b.polls, 2); XCTAssertEqual(s.consecutiveFailures, 0); XCTAssertNotNil(s.lastSuccess)
+    }
+
+    func testANonTransientErrorIsNotRetriedAndIsShown() async {
+        let b = FakeBackend([.failure(GitHubError.unauthorized)])
+        let s = store(b)
+        await s.refresh()
+        XCTAssertEqual(b.polls, 1); XCTAssertEqual(s.consecutiveFailures, 1); XCTAssertEqual(s.errorMessage, "GitHub rejected the token")
+    }
+
+    func testRateLimitIsReportedWithTheTime() async {
+        let b = FakeBackend([.failure(GitHubError.rateLimited(until: Date().addingTimeInterval(300)))])
+        let s = store(b)
+        await s.refresh()
+        XCTAssertTrue(s.errorMessage?.hasPrefix("GitHub rate limit: next poll at") == true)
+    }
+
+    func testUnreachableHostKeepsItsRunnersGreyedThenRecovers() async {
+        var first = snapshot(["a", "b"])
+        first.runners[1].host = "far-host"
+        var second = snapshot(["a"]); second.unreachable = ["far-host"]
+        var third = snapshot(["a", "b"]); third.runners[1].host = "far-host"
+        let s = store(FakeBackend([.success(first), .success(second), .success(third)]))
+        await s.refresh(); await s.refresh()
+        XCTAssertEqual(s.runners.first { $0.id == "b" }?.state, .unreachable)
+        await s.refresh()
+        XCTAssertEqual(s.runners.first { $0.id == "b" }?.state, .idle)
+    }
+}

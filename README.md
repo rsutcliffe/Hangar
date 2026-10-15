@@ -4,6 +4,17 @@
 
 A small macOS app (SwiftUI, Liquid Glass, macOS 26+) that shows the state of self-hosted GitHub Actions runners running in Colima VMs: runner and VM health, current job and step progress, CPU and memory load, stalls and failures, and the shared job queue. Stalls and failures raise a macOS notification. Each runner can be restarted or drained from the window.
 
+<p align="center">
+  <img src="docs/screenshots/failed-dark.png" width="46%" alt="Hangar showing a failed job, a long-running job and a queue, in dark mode (demo data)">
+  <img src="docs/screenshots/stalled-light.png" width="46%" alt="Hangar showing a stalled runner, in light mode (demo data)">
+</p>
+<p align="center">
+  <img src="docs/screenshots/unreachable-dark.png" width="46%" alt="Hangar with an unreachable host and a token expiry warning (demo data)">
+  <img src="docs/screenshots/capacity-dark.png" width="46%" alt="The Capacity window: 24 hours of runner use and queue length (demo data)">
+</p>
+
+Screenshots use the built-in demo data (`Hangar --demo`), not a real setup.
+
 ## Features
 
 - Per-runner cards for every runner found on this Mac, other Macs over SSH, and inside Colima VMs: state, job, step progress, CPU and memory.
@@ -34,7 +45,7 @@ The GitHub token (fine-grained, `actions:read`) is stored in the macOS Keychain 
 
 ## Demo mode
 
-`Hangar --demo` shows scripted data with no token or VMs. Extra flags: `--scenario-failed`, `--scenario-restarting`, `--scenario-paused`, and `--light` / `--dark` to force an appearance.
+`Hangar --demo` shows scripted data with no token or VMs. Extra flags: `--scenario-failed`, `--scenario-restarting`, `--scenario-paused`, `--scenario-unreachable`, `--scenario-offline`, and `--light` / `--dark` to force an appearance.
 
 ## Tests
 
