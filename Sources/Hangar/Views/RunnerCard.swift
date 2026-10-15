@@ -58,6 +58,8 @@ struct RunnerCard: View {
                 Sparkline(values: runner.cpuHistory, color: sparkColor)
             }
 
+            Spacer(minLength: 0)         // buttons sit at the bottom, level across a row
+
             HStack(spacing: 6) {
                 let busy = s == .restarting || s == .unreachable
                 Group {
@@ -78,7 +80,7 @@ struct RunnerCard: View {
             .buttonBorderShape(.capsule).controlSize(.small)
         }
         .padding(.vertical, 18).padding(.horizontal, 16)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)     // fill the row, so cards in a row match
         .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: Theme.cardRadius))
         .overlay { if problem { RoundedRectangle(cornerRadius: Theme.cardRadius).strokeBorder(Theme.problem, lineWidth: 1.5) } }
         // In the top margin, above the name's line, so a long runner name keeps its full width.

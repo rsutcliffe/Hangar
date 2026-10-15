@@ -2,6 +2,11 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.1 - 2026-10-15
+
+- Capacity and Settings links at the bottom of the window open the capacity history and Settings, so they no longer have to be found in the menus.
+- Runner cards in the same row are now the same height, with their buttons level.
+
 ## 0.1.0 - 2026-10-15
 
 First release.

@@ -932,3 +932,12 @@ final class PollLoopTests: XCTestCase {
         XCTAssertEqual(s.runners.first { $0.id == "b" }?.state, .idle)
     }
 }
+
+final class ChunkTests: XCTestCase {
+    func testChunksOfThreeKeepOrderAndTheShortLastRow() {
+        XCTAssertEqual([1, 2, 3, 4, 5].chunked(into: 3), [[1, 2, 3], [4, 5]])
+        XCTAssertEqual([1, 2, 3].chunked(into: 3), [[1, 2, 3]])
+        XCTAssertEqual([Int]().chunked(into: 3), [])
+        XCTAssertEqual([1, 2].chunked(into: 0), [])
+    }
+}

@@ -3,6 +3,7 @@ import SwiftUI
 struct MonitorWindow: View {
     @Bindable var store: MonitorStore
     @Environment(\.scenePhase) private var phase
+    @Environment(\.openWindow) private var openWindow
     @State private var contentHeight: CGFloat = 0
 
     var body: some View {
@@ -12,10 +13,17 @@ struct MonitorWindow: View {
             GlassEffectContainer(spacing: 10) {
                 VStack(spacing: 12) {
                     header(now: ctx.date)
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: 3), spacing: 10) {
-                        ForEach(store.runners) { r in
-                            RunnerCard(runner: r, now: ctx.date, dimmed: store.isStale(now: ctx.date),
-                                       onRestart: { store.restart(r.id) }, onDrain: { store.toggleDrain(r.id) })
+                    // A Grid (not a lazy one) so the cards in a row share the tallest card's height.
+                    Grid(horizontalSpacing: 10, verticalSpacing: 10) {
+                        ForEach(Array(store.runners.chunked(into: 3).enumerated()), id: \.offset) { _, row in
+                            GridRow {
+                                ForEach(row) { r in
+                                    RunnerCard(runner: r, now: ctx.date, dimmed: store.isStale(now: ctx.date),
+                                               onRestart: { store.restart(r.id) }, onDrain: { store.toggleDrain(r.id) })
+                                }
+                                // Keep three equal columns when the last row is short.
+                                ForEach(0..<(3 - row.count), id: \.self) { _ in Color.clear.frame(maxWidth: .infinity) }
+                            }
                         }
                     }
                     if store.notificationsOff {
@@ -29,6 +37,7 @@ struct MonitorWindow: View {
                         Text(e).font(.system(size: 11)).foregroundStyle(Theme.problemText).frame(maxWidth: .infinity, alignment: .leading)
                     }
                     UpNextCard(queue: store.queue, now: ctx.date)
+                    footer
                 }
                 .padding(.horizontal, 14).padding(.bottom, 14)
             }
@@ -49,6 +58,19 @@ struct MonitorWindow: View {
         }
         .background(WindowChrome())
         .onChange(of: phase) { _, p in store.windowVisible = (p == .active) }
+    }
+
+    /// The two places the window doesn't otherwise show (also ⌥⌘C and ⌘,). Kept out of the title bar band, which swallows clicks.
+    private var footer: some View {
+        HStack(spacing: 14) {
+            Spacer()
+            Button { openWindow(id: "capacity") } label: { Label("Capacity", systemImage: "chart.bar.xaxis") }
+                .help("Capacity history (⌥⌘C)")
+            SettingsLink { Label("Settings", systemImage: "gearshape") }
+                .help("Settings (⌘,)")
+        }
+        .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Theme.muted)
+        .padding(.horizontal, 6)
     }
 
     /// Leave room for the title bar and Dock; beyond this the runner list scrolls.
@@ -118,4 +140,12 @@ private struct WindowChrome: NSViewRepresentable {
         return v
     }
     func updateNSView(_ v: NSView, context: Context) {}
+}
+
+extension Array {
+    /// Consecutive slices of at most `size` elements.
+    func chunked(into size: Int) -> [[Element]] {
+        guard size > 0 else { return [] }
+        return stride(from: 0, to: count, by: size).map { Array(self[$0..<Swift.min($0 + size, count)]) }
+    }
 }
