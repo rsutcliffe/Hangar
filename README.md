@@ -55,6 +55,15 @@ xcodebuild -project Hangar.xcodeproj -scheme Hangar test CODE_SIGNING_ALLOWED=NO
 
 ## Releasing
 
+**Simplest: Xcode.** Choose Product ▸ Archive, then in the Organizer click Distribute App ▸ Direct Distribution, upload for notarisation, and Export once Apple approves. Xcode signs with your Developer ID using the Apple ID signed in under Settings ▸ Accounts, so no extra login is needed. Check the result with:
+
+```bash
+codesign --verify --deep --strict Hangar.app
+spctl --assess --type execute --verbose=2 Hangar.app   # expect: accepted, source=Notarized Developer ID
+```
+
+**Scripted:** the steps below do the same from the command line.
+
 `scripts/release.sh` builds a Release, signs it with your Developer ID (hardened runtime), packages a DMG, notarises it, staples the ticket and checks it with Gatekeeper, then prints the SHA-256. It publishes nothing.
 
 One-time setup (the app-specific password stays in your login Keychain, never in the repo):

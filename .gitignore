@@ -30,3 +30,8 @@ build/
 .superpowers/
 graphify-out/
 *.profraw
+
+# Exported builds
+*.app
+*.dmg
+*.zip
