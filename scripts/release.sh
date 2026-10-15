@@ -57,6 +57,9 @@ if [ "$PUBLISH" = 1 ]; then
   [ "$(git rev-parse "v$VERSION^{commit}")" = "$(git rev-parse HEAD)" ] || fail "check out v$VERSION before publishing"
   [ -z "$(git status --porcelain)" ] || fail "uncommitted changes: commit or stash them before publishing"
   # The notes come from this version's section of docs/CHANGELOG.md: no section, no release.
+  # The release title is "Hangar <v>", plus the tag annotation's first line when it is a name (e.g. "Don't Panic").
+  NAME=$(git tag -l --format='%(contents:subject)' "v$VERSION")
+  case "$NAME" in ""|Hangar*) TITLE="Hangar $VERSION" ;; *) TITLE="Hangar $VERSION: $NAME" ;; esac
   scripts/release-notes.sh "$VERSION" > "$WORK/notes.md" || fail "add a '## $VERSION' section to docs/CHANGELOG.md first"
 fi
 
@@ -136,7 +139,7 @@ if [ "$PUBLISH" = 1 ]; then
   if gh release view "v$VERSION" >/dev/null 2>&1; then
     gh release edit "v$VERSION" --notes-file "$WORK/notes.md" >/dev/null
   else
-    gh release create "v$VERSION" --verify-tag --title "Hangar $VERSION" --notes-file "$WORK/notes.md" $([ "$DRAFT" = 1 ] && echo --draft) >/dev/null
+    gh release create "v$VERSION" --verify-tag --title "$TITLE" --notes-file "$WORK/notes.md" $([ "$DRAFT" = 1 ] && echo --draft) >/dev/null
   fi
   gh release upload "v$VERSION" "$DMG" "$DMG.sha256" "$LATEST" "$LATEST.sha256" --clobber
   echo "Attached to the v$VERSION release$([ "$DRAFT" = 1 ] && echo ' (draft: review and publish it on GitHub)')."
