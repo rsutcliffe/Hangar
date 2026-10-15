@@ -1,6 +1,6 @@
 name: Hangar
 options:
-  bundleIdPrefix: com.example
+  bundleIdPrefix: io.github.rsutcliffe
   deploymentTarget:
     macOS: "26.0"
   createIntermediateGroups: true
@@ -14,7 +14,7 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     ENABLE_HARDENED_RUNTIME: YES
     CODE_SIGN_STYLE: Automatic
-    PRODUCT_BUNDLE_IDENTIFIER: com.example.hangar
+    PRODUCT_BUNDLE_IDENTIFIER: io.github.rsutcliffe.hangar
 targets:
   Hangar:
     type: application
@@ -37,6 +37,6 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.hangar.tests
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.rsutcliffe.hangar.tests
         BUNDLE_LOADER: $(TEST_HOST)
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/Hangar.app/Contents/MacOS/Hangar
