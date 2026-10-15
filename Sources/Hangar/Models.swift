@@ -49,6 +49,8 @@ struct Runner: Identifiable, Equatable, Sendable {
     var failedAt: Date?
     var host = ""
     var standby = false
+    /// Recent average CPU of this runner's own processes (percent of one core), when known.
+    var runnerCPU: Double?
 
     var spec: String {
         let hw = "\(cpus) CPU · \(Format.gb(memoryGB))"

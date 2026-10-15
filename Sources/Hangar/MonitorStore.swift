@@ -15,6 +15,7 @@ final class MonitorStore {
     private var failureSeen: [Int: Date] = [:]          // job id -> first seen failed
     private var dismissedFailures: Set<Int> = []
     private var history: [String: [Double]] = [:]
+    private var runnerCPUHistory: [String: [Double]] = [:]      // last 3 per-runner CPU samples
     private var lastEnded: [String: Date] = [:]
     private var lastActive: [String: Date] = {
         (UserDefaults.standard.dictionary(forKey: "lastActive") as? [String: Double] ?? [:]).mapValues(Date.init(timeIntervalSince1970:))
@@ -62,7 +63,10 @@ final class MonitorStore {
                 if dismissedFailures.contains(j.id) { obs.job = nil } else if failureSeen[j.id] == nil { failureSeen[j.id] = min(now, j.lastOutputAt) }   // hold counts from when it failed
             }
             let seen = obs.job.flatMap { failureSeen[$0.id] }
-            var state = StateRules.derive(obs, intent: intent, failureSeenAt: seen, now: now, stallThreshold: config.stallThreshold)
+            if let c = o.runnerCPU { runnerCPUHistory[o.id] = Array((runnerCPUHistory[o.id, default: []] + [c]).suffix(3)) }
+            let cpuAvg = Self.average(runnerCPUHistory[o.id] ?? [], minimum: 2)
+            var state = StateRules.derive(obs, intent: intent, failureSeenAt: seen, now: now, stallThreshold: config.stallThreshold,
+                                          runnerCPUAvg: cpuAvg)
             if intent.restartingSince != nil && state != .restarting { intent.restartingSince = nil }
 
             if intent.draining, !intent.paused, state == .idle {
@@ -83,11 +87,15 @@ final class MonitorStore {
             out.append(Runner(id: o.id, arch: o.arch, cpus: o.cpus, memoryGB: o.memoryGB, state: state,
                               draining: intent.draining, job: shown, cpuHistory: history[o.id] ?? [],
                               memUsedGB: o.memUsedGB, lastJobEndedAt: o.lastJobEndedAt ?? lastEnded[o.id],
-                              failedAt: seen, host: o.host, standby: o.standby))
+                              failedAt: seen, host: o.host, standby: o.standby, runnerCPU: cpuAvg))
         }
         runners = out
         lastUpdated = now
         UserDefaults.standard.set(lastActive.mapValues(\.timeIntervalSince1970), forKey: "lastActive")
+    }
+
+    nonisolated static func average(_ xs: [Double], minimum: Int) -> Double? {
+        xs.count >= minimum ? xs.reduce(0, +) / Double(xs.count) : nil
     }
 
     // MARK: actions

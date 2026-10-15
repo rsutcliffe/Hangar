@@ -15,6 +15,21 @@ struct RunnerFacts: Equatable, Sendable {
     var repo: String
     var listenerRunning: Bool
     var lastOutputAt: Date?
+    /// Cumulative CPU seconds of the runner listener and everything it started; nil if the probe could not read it.
+    var cpuSeconds: Double? = nil
+    /// Percent of one core since the previous poll, filled in by `HostService`.
+    var runnerCPU: Double? = nil
+}
+
+enum CPURate {
+    /// Percent of one core between two cumulative readings; nil when time did not advance or the counter fell
+    /// (a job's processes exited, so the sum dropped).
+    static func percent(prev: (seconds: Double, at: Date)?, now: (seconds: Double, at: Date)) -> Double? {
+        guard let prev else { return nil }
+        let dt = now.at.timeIntervalSince(prev.at), d = now.seconds - prev.seconds
+        guard dt >= 1, d >= 0 else { return nil }
+        return d / dt * 100
+    }
 }
 
 /// Everything learned from one probe of a VM or a native macOS host.
@@ -75,7 +90,8 @@ enum SnapshotParser {
             guard f.count >= 6, let (owner, repo) = ownerRepo(fromURL: f[3]), !f[2].isEmpty else { continue }
             var last: Date?
             if let m = TimeInterval(f[5]), let now { last = Date(timeIntervalSinceNow: -(now - m)) }
-            out.append(RunnerFacts(dir: f[1], name: f[2], owner: owner, repo: repo, listenerRunning: f[4] == "1", lastOutputAt: last))
+            out.append(RunnerFacts(dir: f[1], name: f[2], owner: owner, repo: repo, listenerRunning: f[4] == "1", lastOutputAt: last,
+                                   cpuSeconds: f.count > 6 ? Double(f[6]) : nil))
         }
         return out.sorted { $0.name < $1.name }
     }
@@ -94,11 +110,19 @@ enum SnapshotParser {
 actor HostService {
     private let colima = Shell.find("colima")
     private var prevCPU: [String: ProcParser.CPUTimes] = [:]
+    private var prevRunnerCPU: [String: (seconds: Double, at: Date)] = [:]
     private static let remotePath = "export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH; "
 
     // Probe scripts only read: counters, the runner dirs' .runner (name and repo URL, never credentials),
     // listener process, newest worker log mtime. BOM stripped with tr so it works with BSD and GNU tools.
+    /// Sums CPU time (the third column of `ps -o pid=,ppid=,<cpu time>=`) over `root` and all its descendants.
+    /// Accepts plain seconds (Linux `cputimes`) and `m:ss.ss` / `h:mm:ss` (macOS `time`).
+    static let treeAwk = #"""
+    function secs(s, n, a, v, i) { n = split(s, a, ":"); v = 0; for (i = 1; i <= n; i++) v = v * 60 + a[i]; return v } { pid[NR] = $1; par[$1] = $2; tm[NR] = $3; N = NR } END { total = 0; for (i = 1; i <= N; i++) { p = pid[i]; k = 0; while (p != "" && p != 0 && k < 40) { if (p == root) { total += secs(tm[i]); break } p = par[p]; k++ } } printf "%.2f", total }
+    """#
+
     private static let runnerLoop = #"""
+    ps_all=$(PSCMD)
     for d in "$HOME"/actions-runner*; do
       [ -f "$d/.runner" ] || continue
       j=$(tr -d '\357\273\277\n' < "$d/.runner")
@@ -107,14 +131,20 @@ actor HostService {
       f=$(ls -t "$d"/_diag/Worker_*.log 2>/dev/null | head -1)
       m=none; if [ -n "$f" ]; then m=$(STATCMD "$f"); fi
       if pgrep -f "$d/bin/Runner.Listener" >/dev/null; then l=1; else l=0; fi
-      echo "R|$d|$n|$u|$l|$m"
+      lp=$(pgrep -f "$d/bin/Runner.Listener" | head -1)
+      t=none
+      if [ -n "$lp" ]; then
+        t=$(echo "$ps_all" | awk -v root="$lp" 'TREEAWK')
+      fi
+      echo "R|$d|$n|$u|$l|$m|$t"
     done
-    """#
+    """#.replacingOccurrences(of: "TREEAWK", with: treeAwk)
 
     private static let vmScript = #"""
     head -1 /proc/stat; echo ---; grep -E '^(MemTotal|MemAvailable):' /proc/meminfo; echo ---; date +%s
     echo "H|$(hostname)"
     """# + "\n" + runnerLoop.replacingOccurrences(of: "STATCMD", with: "stat -c %Y")
+        .replacingOccurrences(of: "PSCMD", with: "ps -eo pid=,ppid=,cputimes=")
 
     private static let nativeScript = #"""
     export PATH=$PATH:/usr/sbin:/sbin
@@ -125,6 +155,7 @@ actor HostService {
     echo "C|$(top -l 2 -n 0 -s 1 | awk '/CPU usage/ {l=$0} END {split(l,a," "); gsub("%","",a[7]); print 100-a[7]}')"
     echo "M|$(vm_stat | awk '/page size of/ {ps=$8} /^Pages active/ {a=$3} /^Pages wired down/ {w=$4} /^Pages occupied by compressor/ {c=$5} END {printf "%.0f", (a+w+c)*ps}')"
     """# + "\n" + runnerLoop.replacingOccurrences(of: "STATCMD", with: "stat -f %m")
+        .replacingOccurrences(of: "PSCMD", with: "ps -axo pid=,ppid=,time=")
 
     private func ssh(_ target: String, _ command: String, stdin: String? = nil, timeout: TimeInterval = 25) async throws -> String {
         try await Shell.run("/usr/bin/ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "--", target, command],
@@ -163,7 +194,7 @@ actor HostService {
             throw ShellError.failed(0, "unexpected output from VM")
         }
         prevCPU[key] = times
-        return snap
+        return withRunnerCPU(snap, key: key)
     }
 
     /// nil when the host has no native runner dirs.
@@ -171,7 +202,22 @@ actor HostService {
         let out: String
         if let t = host.target { out = try await ssh(t, "sh -s", stdin: Self.nativeScript, timeout: 30) }
         else { out = try await Shell.run("/bin/sh", ["-s"], stdin: Self.nativeScript, timeout: 30) }
-        return SnapshotParser.parseNative(out)
+        return SnapshotParser.parseNative(out).map { withRunnerCPU($0, key: "\(host.target ?? "local")/native") }
+    }
+
+    /// Turns each runner's cumulative CPU seconds into a rate against the previous poll.
+    private func withRunnerCPU(_ snap: VMSnapshot, key: String) -> VMSnapshot {
+        var s = snap
+        let now = Date()
+        s.runners = s.runners.map { r in
+            var r = r
+            guard let secs = r.cpuSeconds else { return r }
+            let k = "\(key)/\(r.dir)"
+            r.runnerCPU = CPURate.percent(prev: prevRunnerCPU[k], now: (secs, now))
+            prevRunnerCPU[k] = (secs, now)
+            return r
+        }
+        return s
     }
 
     /// Start or stop one runner's service. `dir` and `profile` come from discovery, never from the user.

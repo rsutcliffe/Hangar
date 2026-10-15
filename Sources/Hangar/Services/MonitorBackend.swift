@@ -140,7 +140,8 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                                              vmRunning: true, ghOnline: gh?.online ?? false,
                                              listenerRunning: f.listenerRunning, busy: gh?.busy ?? false,
                                              host: m.label, native: m.native, standby: gh?.isStandby ?? false,
-                                             job: job, cpuPercent: m.snap.cpuPercent, memUsedGB: m.snap.memUsedGB, lastJobEndedAt: nil))
+                                             job: job, cpuPercent: m.snap.cpuPercent, memUsedGB: m.snap.memUsedGB, lastJobEndedAt: nil,
+                                             runnerCPU: f.runnerCPU, cpuSupported: f.cpuSeconds != nil))
             }
         }
         return BackendSnapshot(runners: obs, queue: queue(from: jobs))

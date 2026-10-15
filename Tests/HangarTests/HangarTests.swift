@@ -182,3 +182,71 @@ final class AccessibilityTests: XCTestCase {
         XCTAssertEqual(s.accessibilitySummary(now: now), "y, Idle, standby")
     }
 }
+
+final class StallCPUTests: XCTestCase {
+    let now = Date()
+    func obs(silent: TimeInterval, cpuSupported: Bool) -> RunnerObservation {
+        let job = ActiveJob(id: 1, repo: "r", workflow: "w", runNumber: 1, branch: "main", totalSteps: 9, currentStep: 4,
+                            startedAt: now - 3000, lastOutputAt: now - silent)
+        return RunnerObservation(id: "a", arch: .arm64, cpus: 4, memoryGB: 8, vmRunning: true, ghOnline: true, busy: true,
+                                 job: job, cpuPercent: 10, memUsedGB: 1, lastJobEndedAt: nil, cpuSupported: cpuSupported)
+    }
+    func state(_ o: RunnerObservation, avg: Double?) -> RunnerState {
+        StateRules.derive(o, intent: .init(), failureSeenAt: nil, now: now, stallThreshold: 600, runnerCPUAvg: avg)
+    }
+    func testSilentButBusyStaysRunning() { XCTAssertEqual(state(obs(silent: 900, cpuSupported: true), avg: 80), .running) }
+    func testSilentAndIdleStalls() { XCTAssertEqual(state(obs(silent: 900, cpuSupported: true), avg: 1), .stalled) }
+    func testNotSilentNeverStalls() { XCTAssertEqual(state(obs(silent: 60, cpuSupported: true), avg: 0), .running) }
+    func testCPUReadableButNoSamplesYetWaits() { XCTAssertEqual(state(obs(silent: 900, cpuSupported: true), avg: nil), .running) }
+    func testCPUUnreadableFallsBackToSilence() { XCTAssertEqual(state(obs(silent: 900, cpuSupported: false), avg: nil), .stalled) }
+    func testBoundary() {
+        XCTAssertEqual(state(obs(silent: 900, cpuSupported: true), avg: 4.99), .stalled)
+        XCTAssertEqual(state(obs(silent: 900, cpuSupported: true), avg: 5.0), .running)
+    }
+    func testAverageNeedsTwoSamples() {
+        XCTAssertNil(MonitorStore.average([3], minimum: 2))
+        XCTAssertEqual(MonitorStore.average([2, 4, 6], minimum: 2)!, 4, accuracy: 0.001)
+    }
+}
+
+final class RunnerCPUTests: XCTestCase {
+    func testRate() {
+        let t0 = Date()
+        XCTAssertNil(CPURate.percent(prev: nil, now: (10, t0)))
+        XCTAssertEqual(CPURate.percent(prev: (10, t0), now: (25, t0 + 30))!, 50, accuracy: 0.001)
+        XCTAssertNil(CPURate.percent(prev: (25, t0), now: (10, t0 + 30)))          // counter fell: processes exited
+        XCTAssertNil(CPURate.percent(prev: (10, t0), now: (11, t0 + 0.2)))         // too little time elapsed
+    }
+    func testRunnerLineCarriesCPUSeconds() {
+        let out = """
+        H|vm
+        D|2000
+        R|/h/actions-runner|n1|https://github.com/o/r|1|1990|102.50
+        R|/h/actions-runner-2|n2|https://github.com/o/r|0|none|none
+        """
+        let s = SnapshotParser.parseNative(out)!
+        XCTAssertEqual(s.runners[0].cpuSeconds!, 102.5, accuracy: 0.001)
+        XCTAssertNil(s.runners[1].cpuSeconds)
+    }
+    /// Runs the real awk program the probe sends, on both ps time formats.
+    func testProcessTreeSumWithTheProbeAwk() throws {
+        let ps = """
+          1     0 5
+        100     1 0:02.50
+        101   100 1:30.00
+        102   101 7
+        200     1 99
+        300   200 4
+        """
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/awk")
+        p.arguments = ["-v", "root=100", HostService.treeAwk]
+        let i = Pipe(), o = Pipe()
+        p.standardInput = i; p.standardOutput = o
+        try p.run()
+        i.fileHandleForWriting.write(Data(ps.utf8)); try i.fileHandleForWriting.close()
+        let out = String(decoding: o.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        p.waitUntilExit()
+        XCTAssertEqual(Double(out)!, 99.5, accuracy: 0.01)     // 2.5 + 90 + 7; the unrelated tree is excluded
+    }
+}

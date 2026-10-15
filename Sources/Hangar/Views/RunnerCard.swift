@@ -128,7 +128,9 @@ struct RunnerCard: View {
             return s == .restarting ? "Back shortly" : " "
         }
         switch s {
-        case .stalled: return "No output for \(Format.duration(now.timeIntervalSince(j.lastOutputAt)))"
+        case .stalled:
+            let quiet = "No output for \(Format.duration(now.timeIntervalSince(j.lastOutputAt)))"
+            return runner.runnerCPU == nil ? quiet : quiet + " · idle"
         case .failed:
             let step = j.failedStep ?? j.currentStep
             return j.exitCode.map { "Exit \($0) at step \(step)" } ?? "Failed at step \(step)"

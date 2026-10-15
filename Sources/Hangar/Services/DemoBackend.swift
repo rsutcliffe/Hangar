@@ -27,7 +27,8 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
             let down = lock.withLock { restarted[id].map { now.timeIntervalSince($0) < 12 } ?? false }
             return RunnerObservation(id: id, arch: arch, cpus: cpus, memoryGB: mem, vmRunning: !down, ghOnline: !down,
                                      busy: busy, job: job, cpuPercent: cpu, memUsedGB: used,
-                                     lastJobEndedAt: ended.map { now.addingTimeInterval(-$0) })
+                                     lastJobEndedAt: ended.map { now.addingTimeInterval(-$0) },
+                                     runnerCPU: cpu, cpuSupported: true)
         }
         let wob = Double(Int(now.timeIntervalSince(t0)) % 7)
         let runners = [

@@ -17,6 +17,10 @@ struct RunnerObservation: Equatable, Sendable {
     var cpuPercent: Double
     var memUsedGB: Double
     var lastJobEndedAt: Date?
+    /// CPU of this runner's own process tree, percent of one core; nil until two polls have been taken.
+    var runnerCPU: Double? = nil
+    /// The probe can read per-runner CPU on this host.
+    var cpuSupported = false
 }
 
 /// What the user has asked for, plus what the app has already acted on.
@@ -37,8 +41,11 @@ enum StateRules {
     static let failedHold: TimeInterval = 150      // 2.5 min
 
     /// `failureSeenAt` is when the app first saw this job's failure; nil if no failure to show.
+    /// A silent but busy runner is only stalled when its own processes are also idle.
+    static let stallCPUCeiling = 5.0
+
     static func derive(_ o: RunnerObservation, intent: RunnerIntent, failureSeenAt: Date?,
-                       now: Date, stallThreshold: TimeInterval) -> RunnerState {
+                       now: Date, stallThreshold: TimeInterval, runnerCPUAvg: Double? = nil) -> RunnerState {
         if let since = intent.restartingSince {
             // Restarting lasts until the VM and runner report online again (after at least one poll).
             if !(o.vmRunning && o.ghOnline && o.listenerRunning) || now.timeIntervalSince(since) < 1 { return .restarting }
@@ -48,8 +55,10 @@ enum StateRules {
         if let job = o.job, job.failedStep != nil || job.exitCode != nil,
            let seen = failureSeenAt, now.timeIntervalSince(seen) < failedHold { return .failed }
         if o.busy, let job = o.job {
-            return StallDetector.isStalled(lastOutputAt: job.lastOutputAt, now: now, threshold: stallThreshold)
-                ? .stalled : .running
+            guard StallDetector.isStalled(lastOutputAt: job.lastOutputAt, now: now, threshold: stallThreshold) else { return .running }
+            guard o.cpuSupported else { return .stalled }                       // cannot read CPU: silence alone, as before
+            guard let avg = runnerCPUAvg else { return .running }              // CPU readable but not enough samples yet
+            return avg < stallCPUCeiling ? .stalled : .running
         }
         return .idle
     }
