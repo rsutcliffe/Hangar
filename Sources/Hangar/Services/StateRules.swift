@@ -21,6 +21,9 @@ struct RunnerObservation: Equatable, Sendable {
     var runnerCPU: Double? = nil
     /// The probe can read per-runner CPU on this host.
     var cpuSupported = false
+    var diskFreeKB: Int? = nil
+    var diskUsedPct: Int? = nil
+    var version: String? = nil
 }
 
 /// What the user has asked for, plus what the app has already acted on.

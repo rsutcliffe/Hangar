@@ -7,6 +7,8 @@ struct BackendSnapshot: Sendable {
     /// Labels of hosts that could not be reached this poll.
     var unreachable: [String] = []
     var tokenExpiry: Date? = nil
+    /// Latest actions/runner release (e.g. "2.338.0"), if known.
+    var latestRunner: String? = nil
 }
 
 /// Source of raw facts and the place side effects happen. Live = GitHub + Colima, Demo = scripted.
@@ -112,6 +114,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         snap.warnings = warnings.sorted()
         snap.unreachable = unreachable.sorted()
         snap.tokenExpiry = await github.tokenExpiry()
+        snap.latestRunner = await github.latestRunnerVersion()
         return snap
     }
 
@@ -185,7 +188,8 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                                              listenerRunning: f.listenerRunning, busy: gh?.busy ?? false,
                                              host: m.label, native: m.native, standby: gh?.isStandby ?? false,
                                              job: job, cpuPercent: m.snap.cpuPercent, memUsedGB: m.snap.memUsedGB, lastJobEndedAt: nil,
-                                             runnerCPU: f.runnerCPU, cpuSupported: f.cpuSeconds != nil))
+                                             runnerCPU: f.runnerCPU, cpuSupported: f.cpuSeconds != nil,
+                                             diskFreeKB: f.diskFreeKB, diskUsedPct: f.diskUsedPct, version: f.version))
             }
         }
         return BackendSnapshot(runners: obs, queue: queue(from: jobs, runners: runners))
@@ -201,7 +205,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                          totalSteps: j.steps.count, currentStep: min(current, max(j.steps.count, 1)),
                          startedAt: started, lastOutputAt: lastOutput ?? started,
                          failedStep: j.conclusion == "failure" ? (failedStep ?? current) : nil, exitCode: nil,
-                         failedStepName: failed.flatMap { $0.name.isEmpty ? nil : $0.name }, url: GitHubLink.safe(j.htmlURL))
+                         failedStepName: failed.flatMap { $0.name.isEmpty ? nil : $0.name }, url: GitHubLink.safe(j.htmlURL), jobName: j.name)
     }
 
     static func queue(from jobs: [GHJob], runners: [GHRunner]? = nil) -> [QueuedJob] {

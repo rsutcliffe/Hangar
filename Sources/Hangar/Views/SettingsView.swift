@@ -10,6 +10,9 @@ struct SettingsView: View {
     @State private var hasToken = Keychain.token() != nil
     @State private var loginItem = LoginItemModel()
     @State private var badgeAllowed = true
+    @AppStorage(Config.Key.quietEnabled) private var quietEnabled = false
+    @AppStorage(Config.Key.quietStart) private var quietStart = 22
+    @AppStorage(Config.Key.quietEnd) private var quietEnd = 7
     @State private var report: ConnectionReport?
     @State private var testing = false
 
@@ -48,6 +51,14 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+            Section("Quiet hours") {
+                Toggle("Hold non-urgent alerts", isOn: $quietEnabled)
+                if quietEnabled {
+                    Stepper("From \(String(format: "%02d", quietStart)):00", value: $quietStart, in: 0...23)
+                    Stepper("Until \(String(format: "%02d", quietEnd)):00", value: $quietEnd, in: 0...23)
+                    Text("Stalls, failures and outages still alert. Disk, long-run and repeat-failure notices wait.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section("Connection") {
                 Button(testing ? "Testing…" : "Test connection") {
                     testing = true
@@ -66,7 +77,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: 820)
+        .frame(width: 480, height: 900)
         .onAppear { loginItem.refresh(); Task { badgeAllowed = await NotificationService.badgeAllowed() } }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in loginItem.refresh(); Task { badgeAllowed = await NotificationService.badgeAllowed() } }
     }

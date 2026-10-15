@@ -5,6 +5,9 @@ struct Config: Equatable, Sendable {
     enum Key {
         static let profiles = "profiles"
         static let hosts = "hosts"
+        static let quietEnabled = "quietEnabled"
+        static let quietStart = "quietStart"
+        static let quietEnd = "quietEnd"
         static let stallMinutes = "stallMinutes"
         static let pollSeconds = "pollSeconds"
     }
@@ -14,6 +17,9 @@ struct Config: Equatable, Sendable {
     /// "local" or an SSH target (key auth only). Each host is scanned for a Colima VM and native runner dirs.
     var hosts: [String] = ["local"]
     var stallMinutes = 10
+    var quietEnabled = false
+    var quietStart = 22
+    var quietEnd = 7
     var pollSeconds = 15
 
     var stallThreshold: TimeInterval { TimeInterval(stallMinutes * 60) }
@@ -27,6 +33,9 @@ struct Config: Equatable, Sendable {
         if !hosts.isEmpty { c.hosts = hosts }
         let stall = d.integer(forKey: Key.stallMinutes)
         if stall > 0 { c.stallMinutes = stall }
+        c.quietEnabled = d.bool(forKey: Key.quietEnabled)
+        if d.object(forKey: Key.quietStart) != nil { c.quietStart = min(23, max(0, d.integer(forKey: Key.quietStart))) }
+        if d.object(forKey: Key.quietEnd) != nil { c.quietEnd = min(23, max(0, d.integer(forKey: Key.quietEnd))) }
         let poll = d.integer(forKey: Key.pollSeconds)
         if poll > 0 { c.pollSeconds = poll }
         return c

@@ -27,6 +27,13 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().setBadgeCount(count) { _ in }
     }
 
+    /// A non-urgent notice (disk, long run, failure pattern). The caller decides when it may be shown.
+    func notifyNotice(title: String, body: String) {
+        let c = UNMutableNotificationContent()
+        c.title = title; c.body = body; c.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "notice-\(abs((title + body).hashValue))-\(Int(Date().timeIntervalSince1970))", content: c, trigger: nil))
+    }
+
     func notifyRestartFailed(runner: String, host: String) {
         let c = UNMutableNotificationContent()
         c.title = "Runner did not come back"

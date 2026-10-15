@@ -664,3 +664,103 @@ final class HistoryFlushTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: other.path))
     }
 }
+
+final class DiskRuleTests: XCTestCase {
+    func testWarnsBelowTenGBOrAtNinetyPercent() {
+        XCTAssertNil(DiskRule.warning(freeKB: 47_000_000, usedPct: 76))
+        XCTAssertEqual(DiskRule.warning(freeKB: 3_832_728, usedPct: 81), "Disk low: 3.7 GB free")
+        XCTAssertEqual(DiskRule.warning(freeKB: 50_000_000, usedPct: 90), "Disk 90% full")
+        XCTAssertNil(DiskRule.warning(freeKB: 50_000_000, usedPct: 89))
+        XCTAssertNotNil(DiskRule.warning(freeKB: 10_485_759, usedPct: 10))          // just under 10 GB
+        XCTAssertNil(DiskRule.warning(freeKB: 10_485_760, usedPct: 10))             // exactly 10 GB is fine
+        XCTAssertNil(DiskRule.warning(freeKB: nil, usedPct: 99))                    // unknown: say nothing
+    }
+    func testProbeLineCarriesDiskAndVersion() {
+        let out = """
+        H|vm
+        D|2000
+        R|/h/actions-runner|r1|https://github.com/o/r|1|1990|12.00|3832728|81|2.337.0
+        R|/h/actions-runner-2|r2|https://github.com/o/r|0|none|none|||
+        """
+        let s = SnapshotParser.parseNative(out)!
+        XCTAssertEqual(s.runners[0].diskFreeKB, 3_832_728); XCTAssertEqual(s.runners[0].diskUsedPct, 81)
+        XCTAssertEqual(s.runners[0].version, "2.337.0")
+        XCTAssertNil(s.runners[1].diskFreeKB); XCTAssertNil(s.runners[1].version)
+    }
+    func testNotesShowDiskFirstAndCapAtTwoOnTheCard() {
+        var r = Runner(id: "a", arch: .arm64, cpus: 1, memoryGB: 1, state: .idle)
+        r.diskFreeKB = 1_000_000; r.diskUsedPct = 95; r.failStreak = 4; r.longRunFactor = 2.4
+        XCTAssertEqual(r.notes.map(\.text), ["Disk low: 1.0 GB free", "Failed 4 times in a row here", "Running 2.4x longer than usual"])
+    }
+}
+
+final class VersionCheckTests: XCTestCase {
+    func testParsesTagsAndCompares() {
+        XCTAssertEqual(VersionCheck.parse("v2.338.0"), [2, 338, 0]); XCTAssertEqual(VersionCheck.parse("2.337.0"), [2, 337, 0])
+        XCTAssertNil(VersionCheck.parse("latest")); XCTAssertNil(VersionCheck.parse(""))
+        XCTAssertTrue(VersionCheck.isBehind(current: "2.337.0", latest: "v2.338.0"))
+        XCTAssertTrue(VersionCheck.isBehind(current: "2.9.0", latest: "2.10.0"))              // numeric, not text, order
+        XCTAssertFalse(VersionCheck.isBehind(current: "2.338.0", latest: "2.338.0"))
+        XCTAssertFalse(VersionCheck.isBehind(current: "2.339.0", latest: "2.338.0"))
+        XCTAssertFalse(VersionCheck.isBehind(current: "garbage", latest: "2.338.0"))
+    }
+    func testUpdateNoteIsMutedNotUrgent() {
+        var r = Runner(id: "a", arch: .arm64, cpus: 1, memoryGB: 1, state: .idle)
+        r.version = "2.337.0"; r.latestVersion = "2.338.0"
+        XCTAssertEqual(r.notes, [Runner.Note(text: "Update available: 2.338.0", urgent: false)])
+        r.version = "2.338.0"; XCTAssertTrue(r.notes.isEmpty)
+    }
+}
+
+final class QuietHoursTests: XCTestCase {
+    func q(_ h: Int, _ m: Int = 0, s: Int = 22, e: Int = 7, on: Bool = true) -> Bool {
+        QuietHours.isQuiet(hour: h, minute: m, startHour: s, endHour: e, enabled: on)
+    }
+    func testWindowCrossingMidnight() {
+        XCTAssertTrue(q(22)); XCTAssertTrue(q(23, 59)); XCTAssertTrue(q(0)); XCTAssertTrue(q(6, 59))
+        XCTAssertFalse(q(7)); XCTAssertFalse(q(12)); XCTAssertFalse(q(21, 59))
+    }
+    func testSameDayWindowAndDisabledAndEmpty() {
+        XCTAssertTrue(q(13, s: 12, e: 14)); XCTAssertFalse(q(14, s: 12, e: 14)); XCTAssertFalse(q(11, 59, s: 12, e: 14))
+        XCTAssertFalse(q(23, on: false))
+        XCTAssertFalse(q(3, s: 5, e: 5))                                  // start == end: no window
+    }
+}
+
+final class JobHistoryTests: XCTestCase {
+    let k = JobHistory.key(repo: "r", workflow: "w", job: "j")
+    func testMedianNeedsFiveSamplesAndKeepsTwenty() {
+        var h = JobHistory()
+        for s in [100.0, 200, 300, 400] { h.recordSuccess(jobKey: k, runner: "a", seconds: s) }
+        XCTAssertNil(h.median(jobKey: k))
+        h.recordSuccess(jobKey: k, runner: "a", seconds: 500)
+        XCTAssertEqual(h.median(jobKey: k), 300)
+        for _ in 0..<30 { h.recordSuccess(jobKey: k, runner: "a", seconds: 100) }
+        XCTAssertEqual(h.durations[k]?.count, 20); XCTAssertEqual(h.median(jobKey: k), 100)
+    }
+    func testLongRunNeedsTwiceTheMedianAndTenMinutes() {
+        var h = JobHistory()
+        for _ in 0..<5 { h.recordSuccess(jobKey: k, runner: "a", seconds: 400) }
+        XCTAssertNil(h.longRunFactor(jobKey: k, elapsed: 700))            // not over 2x
+        XCTAssertEqual(h.longRunFactor(jobKey: k, elapsed: 1000)!, 2.5, accuracy: 0.001)
+        var quick = JobHistory(); for _ in 0..<5 { quick.recordSuccess(jobKey: k, runner: "a", seconds: 60) }
+        XCTAssertNil(quick.longRunFactor(jobKey: k, elapsed: 300))        // over 2x but under ten minutes
+        XCTAssertNil(JobHistory().longRunFactor(jobKey: k, elapsed: 5000)) // no history: silent
+    }
+    func testStreakAppearsAtThreeResetsOnSuccessAndIsPerRunner() {
+        var h = JobHistory()
+        h.recordFailure(jobKey: k, runner: "a"); h.recordFailure(jobKey: k, runner: "a")
+        XCTAssertNil(h.streak(runner: "a"))
+        h.recordFailure(jobKey: k, runner: "a"); XCTAssertEqual(h.streak(runner: "a"), 3)
+        XCTAssertNil(h.streak(runner: "b")); XCTAssertNil(h.streak(runner: "aa"))     // prefix must not leak across runners
+        h.recordSuccess(jobKey: k, runner: "a", seconds: 100); XCTAssertNil(h.streak(runner: "a"))
+    }
+    func testRoundTripHoldsOnlyNamesAndNumbers() throws {
+        var h = JobHistory(); h.recordSuccess(jobKey: k, runner: "a", seconds: 12); h.recordFailure(jobKey: k, runner: "a")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("hangar-jobs-\(UUID().uuidString)")
+        let url = dir.appendingPathComponent("jobs.json"); defer { try? FileManager.default.removeItem(at: dir) }
+        h.save(to: url); XCTAssertEqual(JobHistory.load(from: url), h)
+        let json = String(decoding: try Data(contentsOf: url), as: UTF8.self)
+        for bad in ["token", "http", "Bearer", "log"] { XCTAssertFalse(json.contains(bad)) }
+    }
+}

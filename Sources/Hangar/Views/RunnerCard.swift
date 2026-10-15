@@ -39,6 +39,10 @@ struct RunnerCard: View {
                 JobLink(url: runner.job?.url) { Text(line1).font(.system(size: 12)).lineLimit(1).truncationMode(.tail) }
                 Text(line2).font(.system(size: 11, weight: problem ? .semibold : .regular))
                     .foregroundStyle(problem ? Theme.problemText : Theme.muted).lineLimit(1)
+                ForEach(Array(runner.notes.prefix(2).enumerated()), id: \.offset) { _, n in
+                    Text(n.text).font(.system(size: 10, weight: n.urgent ? .semibold : .regular))
+                        .foregroundStyle(n.urgent ? Theme.problemText : Theme.muted).lineLimit(1)
+                }
             }
             .frame(minHeight: 34, alignment: .topLeading)
 

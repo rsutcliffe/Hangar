@@ -30,6 +30,9 @@ final class MonitorStore {
     private var lastSeen: [String: Date] = [:]
     private var outageTracker = OutageTracker()
     private var failedRestarts: Set<String> = []
+    private var jobHistory = JobHistory.load()
+    private var latestRunner: String?
+    private var noticesSent: Set<String> = []
     private(set) var utilisation = UtilisationLog.load()
     var recordHistory = true
     private var lastActive: [String: Date] = {
@@ -75,6 +78,7 @@ final class MonitorStore {
                 let snap = try await backend.poll(config: config)
                 errorMessage = snap.warnings.isEmpty ? nil : snap.warnings.joined(separator: "; ")
                 tokenExpiry = snap.tokenExpiry
+            latestRunner = snap.latestRunner
                 tokenWarning = TokenExpiry.warning(expiry: snap.tokenExpiry, now: Date())
                 apply(snap, config: config, now: Date())
                 lastSuccess = Date(); consecutiveFailures = 0; backoffUntil = nil
@@ -99,7 +103,11 @@ final class MonitorStore {
             var intent = intents[o.id] ?? RunnerIntent()
 
             if let j = obs.job, j.failedStep != nil || j.exitCode != nil {
-                if dismissedFailures.contains(j.id) { obs.job = nil } else if failureSeen[j.id] == nil { failureSeen[j.id] = min(now, j.lastOutputAt) }   // hold counts from when it failed
+                if dismissedFailures.contains(j.id) { obs.job = nil }
+                else if failureSeen[j.id] == nil {
+                    failureSeen[j.id] = min(now, j.lastOutputAt)                // hold counts from when it failed
+                    jobHistory.recordFailure(jobKey: j.historyKey, runner: o.id)
+                }
             }
             let seen = obs.job.flatMap { failureSeen[$0.id] }
             if let c = o.runnerCPU { runnerCPUHistory[o.id] = Array((runnerCPUHistory[o.id, default: []] + [c]).suffix(3)) }
@@ -121,6 +129,14 @@ final class MonitorStore {
             intents[o.id] = intent
 
             let shown = [.running, .stalled, .failed].contains(state) ? obs.job : nil
+            // A job that ended without failing teaches the usual duration and clears the failure streak.
+            if let was = runners.first(where: { $0.id == o.id }), let prev = was.job, prev.id != shown?.id,
+               prev.failedStep == nil, was.state == .running || was.state == .stalled {
+                jobHistory.recordSuccess(jobKey: prev.historyKey, runner: o.id, seconds: now.timeIntervalSince(prev.startedAt))
+            }
+            let longRun = (state == .running || state == .stalled) ? shown.flatMap { jobHistory.longRunFactor(jobKey: $0.historyKey, elapsed: now.timeIntervalSince($0.startedAt)) } : nil
+            let streak = jobHistory.streak(runner: o.id)
+            notices(o, longRun: longRun, streak: streak, job: shown, config: config, now: now)
             if let p = runners.first(where: { $0.id == o.id }), p.job != nil, shown == nil, state != .restarting { lastEnded[o.id] = now }
             if let j = shown {
                 let silent = Int(now.timeIntervalSince(j.lastOutputAt) / 60)
@@ -134,7 +150,8 @@ final class MonitorStore {
                               draining: intent.draining, job: shown, cpuHistory: history[o.id] ?? [],
                               memUsedGB: o.memUsedGB, lastJobEndedAt: o.lastJobEndedAt ?? lastEnded[o.id],
                               failedAt: seen, host: o.host, standby: o.standby, runnerCPU: cpuAvg,
-                              restartFailed: failedRestarts.contains(o.id)))
+                              restartFailed: failedRestarts.contains(o.id), diskFreeKB: o.diskFreeKB, diskUsedPct: o.diskUsedPct,
+                              version: o.version, latestVersion: snap.latestRunner, longRunFactor: longRun, failStreak: streak))
         }
         if recordHistory {
             let longest = queue.map { now.timeIntervalSince($0.queuedAt) }.max() ?? 0
@@ -142,6 +159,7 @@ final class MonitorStore {
                                queueLength: queue.count, longestWait: longest)
             if Int(now.timeIntervalSince1970) / 60 % 5 == 0 || utilisation.hours.count <= 1 { utilisation.save() }
         }
+        if recordHistory { jobHistory.save() }
         for r in out { lastSeen[r.id] = now }
         out += HostRetention.carryOver(previous: runners, current: out, unreachable: Set(snap.unreachable), lastSeen: lastSeen)
         runners = out
@@ -157,7 +175,11 @@ final class MonitorStore {
     }
 
     /// Demo only: seed a day of readings so the Capacity window has something to show.
-    func loadDemoHistory() { utilisation = UtilisationLog.demo(now: Date()) }
+    func loadDemoHistory() {
+        utilisation = UtilisationLog.demo(now: Date())
+        jobHistory.durations[JobHistory.key(repo: "api-server", workflow: "build", job: "")] = [300, 290, 310, 305, 295, 300]
+        jobHistory.streaks[JobHistory.streakKey(runner: "arm-02", jobKey: JobHistory.key(repo: "web", workflow: "test", job: ""))] = 3
+    }
 
     func diagnose() async -> ConnectionReport { await backend.diagnose(config: Config.load()) }
 
@@ -193,6 +215,21 @@ final class MonitorStore {
             setState(id, i.paused ? .paused : r.state, draining: true)
         }
         if i.draining || i.paused || !i.draining { Task { await refresh() } }
+    }
+
+    /// Non-urgent notices go out once, and wait while quiet hours are on. They are shown as notes on the card regardless.
+    private func notices(_ o: RunnerObservation, longRun: Double?, streak: Int?, job: ActiveJob?, config: Config, now: Date) {
+        let quiet = QuietHours.isQuiet(now, config: config)
+        func once(_ key: String, active: Bool, title: String, body: String) {
+            let k = "\(o.id)|\(key)"
+            guard active else { noticesSent.remove(k); return }
+            guard !quiet, noticesSent.insert(k).inserted else { return }           // quiet: not marked, so it is sent when quiet ends
+            notifier.notifyNotice(title: title, body: body)
+        }
+        let disk = DiskRule.warning(freeKB: o.diskFreeKB, usedPct: o.diskUsedPct)
+        once("disk", active: disk != nil, title: "Runner disk low", body: "\(o.id)\(o.host.isEmpty ? "" : " on \(o.host)"): \(disk ?? "")")
+        once("streak", active: streak != nil, title: "Same job keeps failing", body: "\(o.id) has failed the same job \(streak ?? 0) times in a row.")
+        once("long", active: longRun != nil, title: "Job running long", body: "\(o.id): a job is taking \(String(format: "%.1f", longRun ?? 0))x longer than usual.")
     }
 
     private func stopService(_ id: String, config: Config) {

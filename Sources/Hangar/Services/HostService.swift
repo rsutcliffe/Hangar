@@ -19,6 +19,9 @@ struct RunnerFacts: Equatable, Sendable {
     var cpuSeconds: Double? = nil
     /// Percent of one core since the previous poll, filled in by `HostService`.
     var runnerCPU: Double? = nil
+    var diskFreeKB: Int? = nil
+    var diskUsedPct: Int? = nil
+    var version: String? = nil
 }
 
 enum CPURate {
@@ -91,7 +94,9 @@ enum SnapshotParser {
             var last: Date?
             if let m = TimeInterval(f[5]), let now { last = Date(timeIntervalSinceNow: -(now - m)) }
             out.append(RunnerFacts(dir: f[1], name: f[2], owner: owner, repo: repo, listenerRunning: f[4] == "1", lastOutputAt: last,
-                                   cpuSeconds: f.count > 6 ? Double(f[6]) : nil))
+                                   cpuSeconds: f.count > 6 ? Double(f[6]) : nil,
+                                   diskFreeKB: f.count > 7 ? Int(f[7]) : nil, diskUsedPct: f.count > 8 ? Int(f[8]) : nil,
+                                   version: f.count > 9 && !f[9].isEmpty ? f[9] : nil))
         }
         return out.sorted { $0.name < $1.name }
     }
@@ -136,7 +141,10 @@ actor HostService {
       if [ -n "$lp" ]; then
         t=$(echo "$ps_all" | awk -v root="$lp" 'TREEAWK')
       fi
-      echo "R|$d|$n|$u|$l|$m|$t"
+      dfo=$(df -Pk "$d" 2>/dev/null | tail -1)
+      dfree=$(echo "$dfo" | awk '{print $4}'); dpct=$(echo "$dfo" | awk '{print $5}' | tr -d '%')
+      ver=$(grep -o '"Runner.Listener/[0-9.]*"' "$d/bin/Runner.Listener.deps.json" 2>/dev/null | head -1 | sed 's/.*\///;s/"//')
+      echo "R|$d|$n|$u|$l|$m|$t|$dfree|$dpct|$ver"
     done
     """#.replacingOccurrences(of: "TREEAWK", with: treeAwk)
 

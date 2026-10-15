@@ -30,7 +30,9 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
             return RunnerObservation(id: id, arch: arch, cpus: cpus, memoryGB: mem, vmRunning: !down, ghOnline: !down,
                                      listenerRunning: up, busy: busy, host: host, job: job, cpuPercent: cpu, memUsedGB: used,
                                      lastJobEndedAt: ended.map { now.addingTimeInterval(-$0) },
-                                     runnerCPU: cpu, cpuSupported: true)
+                                     runnerCPU: cpu, cpuSupported: true,
+                                     diskFreeKB: id == "x86-01" ? 6_500_000 : 60_000_000, diskUsedPct: id == "x86-01" ? 84 : 40,
+                                     version: id == "arm-01" ? "2.337.0" : "2.338.0")
         }
         let wob = Double(Int(now.timeIntervalSince(t0)) % 7)
         // In the unreachable scenario the second host drops out after 10 seconds, as if its SSH connection failed.
@@ -55,6 +57,7 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
             q(5, "web", "Lint", "main", 1192, .arm64, 20),
         ]
         var snap = BackendSnapshot(runners: runners, queue: queue)
+        snap.latestRunner = "2.338.0"
         if scenario == .unreachable {
             snap.tokenExpiry = now.addingTimeInterval(9 * 86_400)
             if hostDown { snap.unreachable = ["mac-mini"]; snap.warnings = ["mac-mini unreachable (ssh: connect to host mac-mini port 22: Operation timed out)"] }

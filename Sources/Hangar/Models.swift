@@ -30,6 +30,9 @@ struct ActiveJob: Equatable, Sendable {
     var exitCode: Int?
     var failedStepName: String? = nil
     var url: URL? = nil
+    var jobName = ""
+
+    var historyKey: String { JobHistory.key(repo: repo, workflow: workflow, job: jobName) }
 
     /// 0...1, currentStep/totalSteps.
     var progress: Double {
@@ -60,6 +63,26 @@ struct Runner: Identifiable, Equatable, Sendable {
     var lastSeenAt: Date?
     /// The last restart did not bring the runner back online within the timeout.
     var restartFailed = false
+    var diskFreeKB: Int?
+    var diskUsedPct: Int?
+    var version: String?
+    var latestVersion: String?
+    /// Times longer than this job usually takes, when notably long.
+    var longRunFactor: Double?
+    /// Consecutive failures of the same job on this runner, when three or more.
+    var failStreak: Int?
+
+    struct Note: Equatable { var text: String; var urgent: Bool }
+
+    /// Extra lines for the card, most important first.
+    var notes: [Note] {
+        var n: [Note] = []
+        if let d = DiskRule.warning(freeKB: diskFreeKB, usedPct: diskUsedPct) { n.append(Note(text: d, urgent: true)) }
+        if let s = failStreak { n.append(Note(text: "Failed \(s) times in a row here", urgent: true)) }
+        if let f = longRunFactor { n.append(Note(text: String(format: "Running %.1fx longer than usual", f), urgent: true)) }
+        if let v = version, let l = latestVersion, VersionCheck.isBehind(current: v, latest: l) { n.append(Note(text: "Update available: \(l)", urgent: false)) }
+        return n
+    }
 
     var spec: String {
         let hw = "\(cpus) CPU · \(Format.gb(memoryGB))"

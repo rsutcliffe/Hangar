@@ -68,6 +68,22 @@ actor GitHubService {
         }
     }
 
+    private var latestRunner: (version: String, fetched: Date)?
+
+    /// Latest actions/runner release tag, from a public endpoint, cached for six hours. nil if it cannot be read.
+    func latestRunnerVersion(now: Date = Date()) async -> String? {
+        if let c = latestRunner, now.timeIntervalSince(c.fetched) < 6 * 3600 { return c.version }
+        guard let url = URL(string: "https://api.github.com/repos/actions/runner/releases/latest") else { return latestRunner?.version }
+        var req = URLRequest(url: url, timeoutInterval: 10)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")        // no token: it is a public repo
+        guard let (data, resp) = try? await session.data(for: req), (resp as? HTTPURLResponse)?.statusCode == 200,
+              let tag = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["tag_name"] as? String,
+              VersionCheck.parse(tag) != nil else { return latestRunner?.version }
+        let v = tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+        latestRunner = (v, now)
+        return v
+    }
+
     /// Repo-level runners (needs Administration: read on the repo).
     func runners(owner: String, repo: String, token: String) async throws -> [GHRunner] {
         guard Config.isSafeName(owner), Config.isSafeName(repo) else { throw GitHubError.badURL }
