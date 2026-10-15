@@ -35,7 +35,7 @@ struct RunnerCard: View {
                 .frame(height: 38, alignment: .bottomLeading)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(line1).font(.system(size: 12)).lineLimit(1).truncationMode(.tail)
+                JobLink(url: runner.job?.url) { Text(line1).font(.system(size: 12)).lineLimit(1).truncationMode(.tail) }
                 Text(line2).font(.system(size: 11, weight: problem ? .semibold : .regular))
                     .foregroundStyle(problem ? Theme.problemText : Theme.muted).lineLimit(1)
             }
@@ -122,6 +122,13 @@ struct RunnerCard: View {
         }
     }
 
+    /// "Failed: Checkout" when GitHub names the step, otherwise the step number (and exit code if known).
+    static func failureText(_ j: ActiveJob) -> String {
+        let step = j.failedStep ?? j.currentStep
+        if let name = j.failedStepName { return "Failed: \(name)" }
+        return j.exitCode.map { "Exit \($0) at step \(step)" } ?? "Failed at step \(step)"
+    }
+
     private var line2: String {
         guard let j = runner.job else {
             if let end = runner.lastJobEndedAt, s == .idle || s == .paused { return "Last ran \(Format.duration(now.timeIntervalSince(end))) ago" }
@@ -132,8 +139,7 @@ struct RunnerCard: View {
             let quiet = "No output for \(Format.duration(now.timeIntervalSince(j.lastOutputAt)))"
             return runner.runnerCPU == nil ? quiet : quiet + " · idle"
         case .failed:
-            let step = j.failedStep ?? j.currentStep
-            return j.exitCode.map { "Exit \($0) at step \(step)" } ?? "Failed at step \(step)"
+            return Self.failureText(j)
         default:
             let tail = runner.draining ? " · draining" : ""
             return "Step \(j.currentStep) of \(j.totalSteps) · \(Format.duration(now.timeIntervalSince(j.startedAt)))\(tail)"
@@ -157,5 +163,23 @@ struct ProgressBar: View {
         .accessibilityElement()
         .accessibilityLabel("Progress")
         .accessibilityValue("\(Int(min(1, max(0, value)) * 100)) percent")
+    }
+}
+
+/// A job title that opens the job on GitHub when it has a safe link; plain text otherwise.
+struct JobLink<Label: View>: View {
+    let url: URL?
+    @ViewBuilder var label: () -> Label
+
+    var body: some View {
+        if let url {
+            Button { GitHubLink.open(url) } label: { label() }
+                .buttonStyle(.plain)
+                .help("Open on GitHub")
+                .accessibilityHint("Opens the job on GitHub")
+                .onHover { inside in if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
+        } else {
+            label()
+        }
     }
 }

@@ -295,3 +295,41 @@ final class QueueAnalysisTests: XCTestCase {
         XCTAssertEqual(UpNextCard.note(for: j)?.text, "No online runner has: gpu"); XCTAssertEqual(UpNextCard.note(for: j)?.stuck, true)
     }
 }
+
+final class FailureDetailTests: XCTestCase {
+    func json(_ s: String) -> Any { try! JSONSerialization.jsonObject(with: Data(s.utf8)) }
+
+    func testParsesStepNamesAndJobLink() {
+        let run = GitHubService.Run(id: 9, name: "CI", number: 5, branch: "main", status: "completed", conclusion: "failure", updatedAt: Date())
+        let jobs = GitHubService.parseJobs(json(#"""
+        {"jobs":[{"id":1,"status":"completed","conclusion":"failure","labels":["self-hosted"],"runner_name":"r",
+          "created_at":"2026-10-14T09:50:00Z","started_at":"2026-10-14T09:51:00Z","completed_at":"2026-10-14T09:53:00Z",
+          "html_url":"https://github.com/o/r/actions/runs/9/job/1",
+          "steps":[{"number":1,"name":"Set up job","status":"completed","conclusion":"success"},
+                   {"number":2,"name":"Checkout","status":"completed","conclusion":"failure"}]}]}
+        """#), repo: "r", run: run)
+        let a = LiveBackend.activeJob(jobs[0], lastOutput: nil)
+        XCTAssertEqual(a.failedStep, 2)
+        XCTAssertEqual(a.failedStepName, "Checkout")
+        XCTAssertEqual(a.url?.absoluteString, "https://github.com/o/r/actions/runs/9/job/1")
+        XCTAssertEqual(RunnerCard.failureText(a), "Failed: Checkout")
+    }
+
+    func testFallsBackToStepNumberWhenNoName() {
+        var a = ActiveJob(id: 1, repo: "r", workflow: "w", runNumber: 1, branch: "main", totalSteps: 3, currentStep: 2,
+                          startedAt: Date(), lastOutputAt: Date(), failedStep: 2, exitCode: nil)
+        XCTAssertEqual(RunnerCard.failureText(a), "Failed at step 2")
+        a.exitCode = 1
+        XCTAssertEqual(RunnerCard.failureText(a), "Exit 1 at step 2")
+    }
+
+    func testOnlyGitHubHttpsLinksOpen() {
+        XCTAssertNotNil(GitHubLink.safe("https://github.com/o/r/actions/runs/1"))
+        XCTAssertNotNil(GitHubLink.safe("https://www.github.com/o/r"))
+        XCTAssertNil(GitHubLink.safe("http://github.com/o/r"))                 // not https
+        XCTAssertNil(GitHubLink.safe("https://github.com.evil.example/o/r"))   // look-alike host
+        XCTAssertNil(GitHubLink.safe("https://evil.example/github.com"))
+        XCTAssertNil(GitHubLink.safe("file:///etc/passwd"))
+        XCTAssertNil(GitHubLink.safe(""))
+    }
+}

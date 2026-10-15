@@ -31,7 +31,8 @@ struct GHJob: Equatable, Sendable {
     var createdAt: Date; var startedAt: Date?; var completedAt: Date?
     var steps: [Step]
     var name = ""
-    struct Step: Equatable, Sendable { var number: Int; var status: String; var conclusion: String? }
+    var htmlURL = ""
+    struct Step: Equatable, Sendable { var number: Int; var status: String; var conclusion: String?; var name = "" }
 }
 
 actor GitHubService {
@@ -111,13 +112,14 @@ actor GitHubService {
         return list.compactMap { j in
             guard let id = j["id"] as? Int, let created = date(j["created_at"]) else { return nil }
             let steps = (j["steps"] as? [[String: Any]] ?? []).map {
-                GHJob.Step(number: $0["number"] as? Int ?? 0, status: $0["status"] as? String ?? "", conclusion: $0["conclusion"] as? String)
+                GHJob.Step(number: $0["number"] as? Int ?? 0, status: $0["status"] as? String ?? "", conclusion: $0["conclusion"] as? String,
+                            name: $0["name"] as? String ?? "")
             }
             return GHJob(id: id, runId: run.id, repo: repo, workflow: run.name, runNumber: run.number,
                          branch: run.branch, status: j["status"] as? String ?? "", conclusion: j["conclusion"] as? String,
                          labels: j["labels"] as? [String] ?? [], runnerName: j["runner_name"] as? String,
                          createdAt: created, startedAt: date(j["started_at"]), completedAt: date(j["completed_at"]), steps: steps,
-                         name: j["name"] as? String ?? "")
+                         name: j["name"] as? String ?? "", htmlURL: j["html_url"] as? String ?? "")
         }
     }
 }

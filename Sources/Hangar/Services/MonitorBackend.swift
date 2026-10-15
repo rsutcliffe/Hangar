@@ -149,14 +149,16 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
     }
 
     static func activeJob(_ j: GHJob, lastOutput: Date?) -> ActiveJob {
-        let failedStep = j.conclusion == "failure" ? j.steps.first { $0.conclusion == "failure" }?.number : nil
+        let failed = j.conclusion == "failure" ? j.steps.first { $0.conclusion == "failure" } : nil
+        let failedStep = failed?.number
         let current = j.steps.first { $0.status == "in_progress" }?.number
             ?? (j.steps.filter { $0.status == "completed" }.count + 1)
         let started = j.startedAt ?? j.createdAt
         return ActiveJob(id: j.id, repo: j.repo, workflow: j.workflow, runNumber: j.runNumber, branch: j.branch,
                          totalSteps: j.steps.count, currentStep: min(current, max(j.steps.count, 1)),
                          startedAt: started, lastOutputAt: lastOutput ?? started,
-                         failedStep: j.conclusion == "failure" ? (failedStep ?? current) : nil, exitCode: nil)
+                         failedStep: j.conclusion == "failure" ? (failedStep ?? current) : nil, exitCode: nil,
+                         failedStepName: failed.flatMap { $0.name.isEmpty ? nil : $0.name }, url: GitHubLink.safe(j.htmlURL))
     }
 
     static func queue(from jobs: [GHJob], runners: [GHRunner]? = nil) -> [QueuedJob] {
@@ -168,6 +170,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                 let arch: Arch = l.contains(where: { $0.contains("x64") || $0.contains("x86") }) ? .x86 : .arm64
                 var q = QueuedJob(id: j.id, repo: j.repo, workflow: j.workflow, branch: j.branch,
                                   runNumber: j.runNumber, arch: arch, queuedAt: j.createdAt, job: j.name, labels: j.labels)
+                q.url = GitHubLink.safe(j.htmlURL)
                 if let runners {
                     q.eligible = QueueAnalysis.eligible(labels: j.labels, repo: j.repo, runners: runners)
                     if q.eligible?.isEmpty == true { q.missingLabels = QueueAnalysis.missingLabels(labels: j.labels, repo: j.repo, runners: runners) }

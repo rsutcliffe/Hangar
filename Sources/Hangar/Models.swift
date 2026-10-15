@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 enum RunnerState: String, Equatable, Sendable {
@@ -25,6 +26,8 @@ struct ActiveJob: Equatable, Sendable {
     var lastOutputAt: Date
     var failedStep: Int?
     var exitCode: Int?
+    var failedStepName: String? = nil
+    var url: URL? = nil
 
     /// 0...1, currentStep/totalSteps.
     var progress: Double {
@@ -73,8 +76,19 @@ struct QueuedJob: Identifiable, Equatable, Sendable {
     var eligible: [String]? = nil
     /// Job labels that no online runner of the repo has (empty if each label exists but not all on one runner).
     var missingLabels: [String] = []
+    var url: URL? = nil
 
     var isStuck: Bool { eligible?.isEmpty == true }
+}
+
+enum GitHubLink {
+    /// Job and run links come from the API; only open https links on github.com.
+    static func safe(_ s: String) -> URL? {
+        guard let u = URL(string: s), u.scheme == "https", let h = u.host?.lowercased(), h == "github.com" || h == "www.github.com" else { return nil }
+        return u
+    }
+
+    static func open(_ url: URL) { NSWorkspace.shared.open(url) }
 }
 
 enum QueueAnalysis {

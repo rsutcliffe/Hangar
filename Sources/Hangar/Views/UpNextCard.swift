@@ -28,7 +28,7 @@ struct UpNextCard: View {
                 ForEach(queue.prefix(4)) { j in
                     Divider().overlay(Theme.line)
                     HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
+                        JobLink(url: j.url) { VStack(alignment: .leading, spacing: 2) {
                             (Text(verbatim: "\(j.repo) · \(j.workflow)" + (j.job.isEmpty || j.job == j.workflow ? "" : " / \(j.job)")).fontWeight(.semibold)
                                 + Text(verbatim: " #\(j.runNumber) · \(j.branch)").foregroundColor(Theme.muted))
                                 .font(.system(size: 12)).lineLimit(1).truncationMode(.tail)
@@ -36,7 +36,7 @@ struct UpNextCard: View {
                                 Text(note.text).font(.system(size: 10, weight: note.stuck ? .semibold : .regular))
                                     .foregroundStyle(note.stuck ? Theme.problemText : Theme.muted).lineLimit(1)
                             }
-                        }
+                        } }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         Text(j.isStuck ? "No runner" : j.arch.label).font(.system(size: 10, weight: j.isStuck ? .semibold : .regular))
                             .foregroundStyle(j.isStuck ? Theme.onProblem : Theme.text)

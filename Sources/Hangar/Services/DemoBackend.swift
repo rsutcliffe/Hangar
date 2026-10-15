@@ -18,9 +18,10 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
                       startedAt: now.addingTimeInterval(-ran), lastOutputAt: now.addingTimeInterval(-silent))
         }
         var a1 = job(482, "api-server", "build", 482, steps: 9, step: 6, ran: 720, silent: 20)
+        a1.url = GitHubLink.safe("https://github.com/rsutcliffe/Hangar")        // a real page, so the link can be tried in the demo
         var a2 = job(1190, "web", "test", 1190, steps: 7, step: 3, ran: 1500, silent: 840)
         if scenario == .failed {
-            a1.failedStep = 4; a1.exitCode = 1; a1.currentStep = 4
+            a1.failedStep = 4; a1.exitCode = 1; a1.currentStep = 4; a1.failedStepName = "Run unit tests"
             a2.lastOutputAt = now.addingTimeInterval(-30)
         }
         func obs(_ id: String, _ arch: Arch, _ cpus: Int, _ mem: Double, busy: Bool, job: ActiveJob?, cpu: Double, used: Double, ended: Double?) -> RunnerObservation {
