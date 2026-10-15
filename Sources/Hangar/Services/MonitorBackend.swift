@@ -4,6 +4,9 @@ struct BackendSnapshot: Sendable {
     var runners: [RunnerObservation]
     var queue: [QueuedJob]
     var warnings: [String] = []
+    /// Labels of hosts that could not be reached this poll.
+    var unreachable: [String] = []
+    var tokenExpiry: Date? = nil
 }
 
 /// Source of raw facts and the place side effects happen. Live = GitHub + Colima, Demo = scripted.
@@ -23,6 +26,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
     private let hosts = HostService()
     private let lock = NSLock()
     private var located: [String: Place] = [:]          // runner name -> where it lives
+    private var labels: [String: String] = [:]          // host target -> label from the last successful probe
 
     struct Place: Sendable { var host: HostSpec; var profile: String?; var dir: String }
 
@@ -44,7 +48,8 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         // Probe every host concurrently; an unreachable host is a warning, not a failure.
         var machines: [Machine] = []
         var warnings: [String] = []
-        await withTaskGroup(of: ([Machine], String?).self) { group in
+        var unreachable: [String] = []
+        await withTaskGroup(of: ([Machine], String?, String?).self) { group in
             for h in config.hosts.map(HostSpec.init) {
                 group.addTask {
                     var out: [Machine] = []
@@ -75,10 +80,12 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                     }
                     let label = h.isLocal ? "this Mac" : SnapshotParser.shortName(hostname.isEmpty ? (h.target ?? "") : hostname)
                     out = out.map { var m = $0; m.label = label; return m }
-                    return (out, reached ? nil : "\(h.target ?? "This Mac") unreachable" + (why.isEmpty ? "" : " (\(why))"))
+                    if reached, let t = h.target { self.lock.withLock { self.labels[t] = label } }
+                    let down = reached ? nil : (h.target.flatMap { t in self.lock.withLock { self.labels[t] } } ?? h.target ?? "this Mac")
+                    return (out, reached ? nil : "\(h.target ?? "This Mac") unreachable" + (why.isEmpty ? "" : " (\(why))"), down)
                 }
             }
-            for await (m, w) in group { machines += m; if let w { warnings.append(w) } }
+            for await (m, w, down) in group { machines += m; if let w { warnings.append(w) }; if let down { unreachable.append(down) } }
         }
 
         var map: [String: Place] = [:]
@@ -102,6 +109,8 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         }
         var snap = Self.assemble(machines: machines, runners: runners, jobs: jobs, now: Date())
         snap.warnings = warnings.sorted()
+        snap.unreachable = unreachable.sorted()
+        snap.tokenExpiry = await github.tokenExpiry()
         return snap
     }
 

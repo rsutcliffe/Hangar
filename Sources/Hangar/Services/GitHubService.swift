@@ -37,6 +37,10 @@ struct GHJob: Equatable, Sendable {
 
 actor GitHubService {
     private let session: URLSession
+    private var expiry: Date?
+
+    /// From the `GitHub-Authentication-Token-Expiration` header on the latest response; nil if the token has none.
+    func tokenExpiry() -> Date? { expiry }
     init(session: URLSession = .shared) { self.session = session }
 
     private func get(_ path: String, token: String) async throws -> Any {
@@ -47,6 +51,7 @@ actor GitHubService {
         req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         let (data, resp) = try await session.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        if let h = (resp as? HTTPURLResponse)?.value(forHTTPHeaderField: "GitHub-Authentication-Token-Expiration") { expiry = TokenExpiry.parse(h) }
         switch code {
         case 200..<300: return try JSONSerialization.jsonObject(with: data)
         case 401: throw GitHubError.unauthorized

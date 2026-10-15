@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SettingsView: View {
+    var store: MonitorStore
     @AppStorage(Config.Key.profiles) private var profiles = "default"
     @AppStorage(Config.Key.hosts) private var hosts = "local"
     @AppStorage(Config.Key.stallMinutes) private var stallMinutes = 10
@@ -15,6 +16,9 @@ struct SettingsView: View {
             Section("GitHub (repos are discovered from the runners)") {
                 SecureField(hasToken ? "Token saved in Keychain (enter to replace)" : "Token: Actions + Administration read", text: $token)
                     .onSubmit(saveToken)
+                if let e = store.tokenExpiry {
+                    Text("Token expires \(e.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(.secondary)
+                }
                 HStack {
                     Button("Save token", action: saveToken).disabled(token.isEmpty)
                     Button("Remove token", role: .destructive) { Keychain.delete(); hasToken = false }.disabled(!hasToken)

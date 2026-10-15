@@ -378,3 +378,64 @@ final class ProblemBadgeTests: XCTestCase {
         XCTAssertNil(ProblemBadge.label(0)); XCTAssertEqual(ProblemBadge.label(3), "3")
     }
 }
+
+final class StaleHostTests: XCTestCase {
+    func r(_ id: String, host: String, _ s: RunnerState = .idle) -> Runner {
+        var x = Runner(id: id, arch: .arm64, cpus: 2, memoryGB: 4, state: s); x.host = host; return x
+    }
+    let t0 = Date(timeIntervalSince1970: 1_000_000)
+
+    func testRunnersOfAnUnreachableHostAreCarriedOverGreyed() {
+        let prev = [r("a", host: "this Mac"), r("b", host: "mac-mini", .running), r("c", host: "mac-mini")]
+        let cur = [r("a", host: "this Mac")]
+        let out = HostRetention.carryOver(previous: prev, current: cur, unreachable: ["mac-mini"], lastSeen: ["b": t0, "c": t0])
+        XCTAssertEqual(out.map(\.id), ["b", "c"])
+        XCTAssertTrue(out.allSatisfy { $0.state == .unreachable && $0.job == nil && $0.lastSeenAt == t0 })
+    }
+    func testAReachableHostsMissingRunnerIsNotCarriedOver() {
+        let out = HostRetention.carryOver(previous: [r("b", host: "mac-mini")], current: [], unreachable: [], lastSeen: ["b": t0])
+        XCTAssertTrue(out.isEmpty)
+    }
+    func testLastSeenKeepsTheFirstTimeWhileStillUnreachable() {
+        var already = r("b", host: "mac-mini", .unreachable); already.lastSeenAt = t0
+        let out = HostRetention.carryOver(previous: [already], current: [], unreachable: ["mac-mini"], lastSeen: ["b": t0 + 600])
+        XCTAssertEqual(out.first?.lastSeenAt, t0)
+    }
+    func testRecoveredRunnerIsNotDuplicated() {
+        let out = HostRetention.carryOver(previous: [r("b", host: "mac-mini", .unreachable)], current: [r("b", host: "mac-mini")],
+                                          unreachable: [], lastSeen: [:])
+        XCTAssertTrue(out.isEmpty)
+    }
+    func testUnreachableIsNotAProblemForTheBadge() {
+        XCTAssertFalse(RunnerState.unreachable.isProblem)
+        XCTAssertEqual(r("b", host: "x", .unreachable).accessibilitySummary(now: t0), "b, Unreachable")
+    }
+}
+
+final class TokenExpiryTests: XCTestCase {
+    let utc = TimeZone(identifier: "UTC")!
+    func date(_ y: Int, _ m: Int, _ d: Int, _ h: Int = 0, _ mi: Int = 0, _ s: Int = 0) -> Date {
+        var c = Calendar(identifier: .gregorian); c.timeZone = utc
+        return c.date(from: DateComponents(year: y, month: m, day: d, hour: h, minute: mi, second: s))!
+    }
+    func testParsesTheReportedFormatsLeniently() {
+        let want = date(2027, 1, 12, 14, 14, 1)
+        XCTAssertEqual(TokenExpiry.parse("2027-01-12 14:14:01 UTC"), want)
+        XCTAssertEqual(TokenExpiry.parse("2027-01-12 14:14:01 GMT"), want)
+        XCTAssertEqual(TokenExpiry.parse("2027-01-12 14:14:01 +0000"), want)
+        XCTAssertEqual(TokenExpiry.parse("2027-01-12T14:14:01Z"), want)
+        XCTAssertEqual(TokenExpiry.parse(" 2027-01-12 "), date(2027, 1, 12))
+        XCTAssertNil(TokenExpiry.parse("never")); XCTAssertNil(TokenExpiry.parse(""))
+    }
+    func testWarningWindow() {
+        let exp = date(2027, 1, 12)
+        XCTAssertNil(TokenExpiry.warning(expiry: nil, now: date(2026, 12, 1)))
+        XCTAssertNil(TokenExpiry.warning(expiry: exp, now: date(2026, 12, 1)))                         // 42 days out
+        XCTAssertNil(TokenExpiry.warning(expiry: exp, now: date(2026, 12, 28)))                        // 15 days out
+        XCTAssertEqual(TokenExpiry.warning(expiry: exp, now: date(2026, 12, 29)), "The GitHub token expires in 14 days")   // edge: shown
+        XCTAssertEqual(TokenExpiry.warning(expiry: exp, now: date(2026, 12, 30)), "The GitHub token expires in 13 days")
+        XCTAssertEqual(TokenExpiry.warning(expiry: exp, now: date(2027, 1, 3)), "The GitHub token expires in 9 days")
+        XCTAssertEqual(TokenExpiry.warning(expiry: exp, now: date(2027, 1, 11, 20)), "The GitHub token expires within a day")
+        XCTAssertEqual(TokenExpiry.warning(expiry: exp, now: date(2027, 1, 13)), "The GitHub token has expired")
+    }
+}

@@ -9,7 +9,7 @@ struct HangarApp: App {
         let demo = args.contains("--demo")
         if args.contains("--light") { NSApplication.shared.appearance = NSAppearance(named: .aqua) }     // for checking Light mode
         if args.contains("--dark") { NSApplication.shared.appearance = NSAppearance(named: .darkAqua) }
-        let scenario = args.contains("--scenario-failed") ? DemoBackend.Scenario.failed : .stalled
+        let scenario: DemoBackend.Scenario = args.contains("--scenario-failed") ? .failed : args.contains("--scenario-unreachable") ? .unreachable : .stalled
         let backend: MonitorBackend = demo ? DemoBackend(scenario: scenario) : LiveBackend()
         let s = MonitorStore(backend: backend)
         var action: ((MonitorStore) -> Void)?
@@ -31,6 +31,6 @@ struct HangarApp: App {
                     .keyboardShortcut("r")
             }
         }
-        Settings { SettingsView() }
+        Settings { SettingsView(store: store) }
     }
 }

@@ -27,8 +27,8 @@ struct RunnerCard: View {
             .frame(maxWidth: .infinity, minHeight: 32, alignment: .topLeading)
 
             Text(figure)
-                .font(.system(size: s == .restarting ? 28 : 38, weight: .semibold))
-                .tracking(s == .restarting ? -0.84 : -1.14)
+                .font(.system(size: smallFigure ? 28 : 38, weight: .semibold))
+                .tracking(smallFigure ? -0.84 : -1.14)
                 .monospacedDigit()
                 .foregroundStyle(figureColor)
                 .lineLimit(1).minimumScaleFactor(0.6)
@@ -54,7 +54,7 @@ struct RunnerCard: View {
             }
 
             HStack(spacing: 6) {
-                let busy = s == .restarting
+                let busy = s == .restarting || s == .unreachable
                 Group {
                     if problem {
                         Button(action: onRestart) { Text("Restart").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.onProblem) }
@@ -98,14 +98,17 @@ struct RunnerCard: View {
         case .paused: "Paused"
         case .idle: "Idle"
         case .offline: "Offline"
+        case .unreachable: "Unreachable"
         }
     }
+
+    private var smallFigure: Bool { s == .restarting || s == .unreachable }
 
     private var figureColor: Color {
         switch s {
         case .running: Theme.running
         case .stalled, .failed: Theme.problem
-        case .restarting, .offline: Theme.muted
+        case .restarting, .offline, .unreachable: Theme.muted
         default: Theme.text
         }
     }
@@ -118,6 +121,7 @@ struct RunnerCard: View {
         case .restarting: return "Restarting runner"
         case .paused: return "Draining finished"
         case .offline: return "Not connected"
+        case .unreachable: return "Host unreachable"
         default: return "No job"
         }
     }
@@ -132,6 +136,7 @@ struct RunnerCard: View {
     private var line2: String {
         guard let j = runner.job else {
             if let end = runner.lastJobEndedAt, s == .idle || s == .paused { return "Last ran \(Format.duration(now.timeIntervalSince(end))) ago" }
+            if s == .unreachable { return runner.lastSeenAt.map { "Last seen \(Format.duration(now.timeIntervalSince($0))) ago" } ?? " " }
             return s == .restarting ? "Back shortly" : " "
         }
         switch s {

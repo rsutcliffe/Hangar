@@ -3,6 +3,8 @@ import Foundation
 
 enum RunnerState: String, Equatable, Sendable {
     case running, stalled, failed, restarting, idle, paused, offline
+    /// Its whole host could not be reached; shown from the last known state.
+    case unreachable
 
     /// Stalled or failed: needs the user, so it is shown in red.
     var isProblem: Bool { self == .stalled || self == .failed }
@@ -54,6 +56,8 @@ struct Runner: Identifiable, Equatable, Sendable {
     var standby = false
     /// Recent average CPU of this runner's own processes (percent of one core), when known.
     var runnerCPU: Double?
+    /// When the runner was last seen; set while its host is unreachable.
+    var lastSeenAt: Date?
 
     var spec: String {
         let hw = "\(cpus) CPU · \(Format.gb(memoryGB))"
@@ -139,6 +143,7 @@ extension RunnerState {
         case .idle: "Idle"
         case .paused: "Paused"
         case .offline: "Offline"
+        case .unreachable: "Unreachable"
         }
     }
 }

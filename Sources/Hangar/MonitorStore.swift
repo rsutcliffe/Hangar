@@ -9,6 +9,8 @@ final class MonitorStore {
     private(set) var lastUpdated: Date?
     private(set) var errorMessage: String?
     private(set) var notificationsOff = false
+    private(set) var tokenWarning: String?
+    private(set) var tokenExpiry: Date?
 
     private let backend: MonitorBackend
     private let notifier = NotificationService()
@@ -18,6 +20,7 @@ final class MonitorStore {
     private var history: [String: [Double]] = [:]
     private var runnerCPUHistory: [String: [Double]] = [:]      // last 3 per-runner CPU samples
     private var lastEnded: [String: Date] = [:]
+    private var lastSeen: [String: Date] = [:]
     private var lastActive: [String: Date] = {
         (UserDefaults.standard.dictionary(forKey: "lastActive") as? [String: Double] ?? [:]).mapValues(Date.init(timeIntervalSince1970:))
     }()
@@ -46,6 +49,8 @@ final class MonitorStore {
         do {
             let snap = try await backend.poll(config: config)
             errorMessage = snap.warnings.isEmpty ? nil : snap.warnings.joined(separator: "; ")
+            tokenExpiry = snap.tokenExpiry
+            tokenWarning = TokenExpiry.warning(expiry: snap.tokenExpiry, now: Date())
             apply(snap, config: config, now: Date())
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? "Poll failed"
@@ -90,6 +95,8 @@ final class MonitorStore {
                               memUsedGB: o.memUsedGB, lastJobEndedAt: o.lastJobEndedAt ?? lastEnded[o.id],
                               failedAt: seen, host: o.host, standby: o.standby, runnerCPU: cpuAvg))
         }
+        for r in out { lastSeen[r.id] = now }
+        out += HostRetention.carryOver(previous: runners, current: out, unreachable: Set(snap.unreachable), lastSeen: lastSeen)
         runners = out
         lastUpdated = now
         let problems = ProblemBadge.count(out)
@@ -105,7 +112,7 @@ final class MonitorStore {
     // MARK: actions
 
     func restart(_ id: String) {
-        guard let r = runners.first(where: { $0.id == id }), r.state != .restarting else { return }
+        guard let r = runners.first(where: { $0.id == id }), r.state != .restarting, r.state != .unreachable else { return }
         if let j = r.job { dismissedFailures.insert(j.id) }
         var i = intents[id] ?? RunnerIntent()
         i.restartingSince = Date(); i.paused = false; i.draining = false
@@ -119,7 +126,7 @@ final class MonitorStore {
     }
 
     func toggleDrain(_ id: String) {
-        guard let r = runners.first(where: { $0.id == id }), r.state != .restarting else { return }
+        guard let r = runners.first(where: { $0.id == id }), r.state != .restarting, r.state != .unreachable else { return }
         var i = intents[id] ?? RunnerIntent()
         let config = Config.load()
         if i.draining || i.paused {
