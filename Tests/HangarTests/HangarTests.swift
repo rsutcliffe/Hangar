@@ -82,22 +82,22 @@ final class GitHubParseTests: XCTestCase {
     }
     func testAssembleAcrossMachines() {
         let now = Date()
-        let job = GHJob(id: 1, runId: 9, repo: "hoci", workflow: "build", runNumber: 482, branch: "main", status: "in_progress", conclusion: nil,
-                        labels: ["self-hosted"], runnerName: "m4-scoreview-ci", createdAt: now, startedAt: now, completedAt: nil,
+        let job = GHJob(id: 1, runId: 9, repo: "gadgets", workflow: "build", runNumber: 482, branch: "main", status: "in_progress", conclusion: nil,
+                        labels: ["self-hosted"], runnerName: "m4-web-ci", createdAt: now, startedAt: now, completedAt: nil,
                         steps: [.init(number: 1, status: "in_progress", conclusion: nil)])
         let vm = LiveBackend.Machine(label: "mac-mini", info: VMInfo(running: true, arch: .arm64, cpus: 6, memoryGB: 12),
             snap: VMSnapshot(cpuPercent: 12, memUsedGB: 3, runners: [
-                RunnerFacts(dir: "/h/a", name: "m4-scoreview-ci", owner: "rsutcliffe", repo: "hoci", listenerRunning: true, lastOutputAt: now)]),
+                RunnerFacts(dir: "/h/a", name: "m4-web-ci", owner: "example-org", repo: "gadgets", listenerRunning: true, lastOutputAt: now)]),
             native: false, host: HostSpec("192.0.2.10"), profile: "default")
         let nat = LiveBackend.Machine(label: "mac-mini", info: nil,
             snap: VMSnapshot(cpuPercent: 40, memUsedGB: 9, runners: [
-                RunnerFacts(dir: "/Users/u/actions-runner", name: "mac-mini-m4", owner: "rsutcliffe", repo: "CertsVault", listenerRunning: true, lastOutputAt: nil)],
+                RunnerFacts(dir: "/Users/u/actions-runner", name: "mini-native", owner: "example-org", repo: "vault", listenerRunning: true, lastOutputAt: nil)],
                              hostname: "mac-mini.local", cpus: 10, memTotalGB: 16),
             native: true, host: HostSpec("192.0.2.10"), profile: nil)
-        let snap = LiveBackend.assemble(machines: [vm, nat], runners: [GHRunner(name: "m4-scoreview-ci", online: true, busy: true, labels: []),
-                                                                        GHRunner(name: "mac-mini-m4", online: true, busy: false, labels: [])],
+        let snap = LiveBackend.assemble(machines: [vm, nat], runners: [GHRunner(name: "m4-web-ci", online: true, busy: true, labels: []),
+                                                                        GHRunner(name: "mini-native", online: true, busy: false, labels: [])],
                                         jobs: [job], now: now)
-        XCTAssertEqual(snap.runners.map(\.id), ["m4-scoreview-ci", "mac-mini-m4"])
+        XCTAssertEqual(snap.runners.map(\.id), ["m4-web-ci", "mini-native"])
         XCTAssertEqual(snap.runners[0].job?.id, 1); XCTAssertEqual(snap.runners[0].cpus, 6)
         XCTAssertFalse(snap.runners[0].standby)
         XCTAssertEqual(snap.runners[1].cpus, 10); XCTAssertEqual(snap.runners[1].memoryGB, 16, accuracy: 0.001); XCTAssertTrue(snap.runners[1].native)
@@ -114,8 +114,8 @@ final class SnapshotParserTests: XCTestCase {
         ---
         1000
         H|colima
-        R|/home/u/actions-runner-hoci|colima-scoreview-ci|https://github.com/rsutcliffe/hoci|1|940
-        R|/home/u/actions-runner|colima-tenantsafe-ci|https://github.com/rsutcliffe/TenantShield|0|none
+        R|/home/u/actions-runner-gadgets|colima-web-ci|https://github.com/example-org/gadgets|1|940
+        R|/home/u/actions-runner|colima-api-ci|https://github.com/example-org/widgets|0|none
 
         """
         let prev = ProcParser.cpuTimes(fromStatLine: "cpu  100 0 100 700 100 0 0 0 0 0")
@@ -123,7 +123,7 @@ final class SnapshotParserTests: XCTestCase {
         XCTAssertEqual(snap.cpuPercent, 20, accuracy: 0.01)
         XCTAssertEqual(snap.memUsedGB, 5, accuracy: 0.001)
         XCTAssertEqual(snap.hostname, "colima")
-        XCTAssertEqual(snap.runners.map(\.name), ["colima-scoreview-ci", "colima-tenantsafe-ci"])
+        XCTAssertEqual(snap.runners.map(\.name), ["colima-web-ci", "colima-api-ci"])
         XCTAssertEqual(snap.runners[0].lastOutputAt!.timeIntervalSinceNow, -60, accuracy: 2)
         XCTAssertNil(snap.runners[1].lastOutputAt); XCTAssertFalse(snap.runners[1].listenerRunning)
         XCTAssertNil(SnapshotParser.ownerRepo(fromURL: "https://github.com/a;b/c"))
@@ -135,13 +135,13 @@ final class SnapshotParserTests: XCTestCase {
         N|10|17179869184
         C|45.5
         M|8589934592
-        R|/Users/u/actions-runner|mac-mini-m4|https://github.com/rsutcliffe/CertsVault|1|1990
+        R|/Users/u/actions-runner|mini-native|https://github.com/example-org/vault|1|1990
 
         """
         let s = SnapshotParser.parseNative(out)!
         XCTAssertEqual(s.cpus, 10); XCTAssertEqual(s.memTotalGB!, 16, accuracy: 0.001)
         XCTAssertEqual(s.memUsedGB, 8, accuracy: 0.001); XCTAssertEqual(s.cpuPercent, 45.5, accuracy: 0.01)
-        XCTAssertEqual(s.runners.first?.repo, "CertsVault")
+        XCTAssertEqual(s.runners.first?.repo, "vault")
         XCTAssertNil(SnapshotParser.parseNative("NONE\n"))
         XCTAssertEqual(SnapshotParser.shortName("mac-mini.local"), "mac-mini")
     }
@@ -257,20 +257,20 @@ final class QueueAnalysisTests: XCTestCase {
     }
     let rs: [GHRunner] = []
     func testSubsetMatchIsCaseInsensitive() {
-        let runners = [runner("a", ["self-hosted", "Linux", "ARM64", "tenantsafe-ci", "tenantsafe-supabase"]),
-                       runner("b", ["self-hosted", "Linux", "ARM64", "tenantsafe-ci"])]
-        XCTAssertEqual(QueueAnalysis.eligible(labels: ["self-hosted", "linux", "tenantsafe-ci"], repo: "ts", runners: runners), ["a", "b"])
-        XCTAssertEqual(QueueAnalysis.eligible(labels: ["self-hosted", "linux", "tenantsafe-supabase"], repo: "ts", runners: runners), ["a"])
+        let runners = [runner("a", ["self-hosted", "Linux", "ARM64", "api-ci", "db-tests"]),
+                       runner("b", ["self-hosted", "Linux", "ARM64", "api-ci"])]
+        XCTAssertEqual(QueueAnalysis.eligible(labels: ["self-hosted", "linux", "api-ci"], repo: "ts", runners: runners), ["a", "b"])
+        XCTAssertEqual(QueueAnalysis.eligible(labels: ["self-hosted", "linux", "db-tests"], repo: "ts", runners: runners), ["a"])
     }
     func testOfflineRunnersNeverCount() {
-        let runners = [runner("a", online: false, ["self-hosted", "tenantsafe-supabase"]), runner("b", ["self-hosted"])]
-        XCTAssertEqual(QueueAnalysis.eligible(labels: ["self-hosted", "tenantsafe-supabase"], repo: "ts", runners: runners), [])
-        XCTAssertEqual(QueueAnalysis.missingLabels(labels: ["self-hosted", "tenantsafe-supabase"], repo: "ts", runners: runners), ["tenantsafe-supabase"])
+        let runners = [runner("a", online: false, ["self-hosted", "db-tests"]), runner("b", ["self-hosted"])]
+        XCTAssertEqual(QueueAnalysis.eligible(labels: ["self-hosted", "db-tests"], repo: "ts", runners: runners), [])
+        XCTAssertEqual(QueueAnalysis.missingLabels(labels: ["self-hosted", "db-tests"], repo: "ts", runners: runners), ["db-tests"])
     }
     func testRunnersOnlyServeTheirOwnRepo() {
-        let runners = [runner("a", repo: "hoci", ["self-hosted"])]
+        let runners = [runner("a", repo: "gadgets", ["self-hosted"])]
         XCTAssertEqual(QueueAnalysis.eligible(labels: ["self-hosted"], repo: "ts", runners: runners), [])
-        XCTAssertEqual(QueueAnalysis.eligible(labels: ["self-hosted"], repo: "hoci", runners: runners), ["a"])
+        XCTAssertEqual(QueueAnalysis.eligible(labels: ["self-hosted"], repo: "gadgets", runners: runners), ["a"])
     }
     func testQueueCarriesEligibilityAndStuckCount() {
         let now = Date()
