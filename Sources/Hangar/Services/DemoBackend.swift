@@ -3,7 +3,7 @@ import Foundation
 /// Scripted data mirroring the prototype so the UI can be checked with no token or VMs.
 /// Enabled with the `--demo` launch argument.
 final class DemoBackend: MonitorBackend, @unchecked Sendable {
-    enum Scenario: String { case stalled, failed, unreachable }
+    enum Scenario: String { case stalled, failed, unreachable, offline }
     let scenario: Scenario
     private let lock = NSLock()
     private var restarted: [String: Date] = [:]
@@ -25,10 +25,10 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
             a2.lastOutputAt = now.addingTimeInterval(-30)
         }
         func obs(_ id: String, _ arch: Arch, _ cpus: Int, _ mem: Double, busy: Bool, job: ActiveJob?, cpu: Double, used: Double, ended: Double?,
-                 host: String = "") -> RunnerObservation {
+                 host: String = "", up: Bool = true) -> RunnerObservation {
             let down = lock.withLock { restarted[id].map { now.timeIntervalSince($0) < 12 } ?? false }
             return RunnerObservation(id: id, arch: arch, cpus: cpus, memoryGB: mem, vmRunning: !down, ghOnline: !down,
-                                     busy: busy, host: host, job: job, cpuPercent: cpu, memUsedGB: used,
+                                     listenerRunning: up, busy: busy, host: host, job: job, cpuPercent: cpu, memUsedGB: used,
                                      lastJobEndedAt: ended.map { now.addingTimeInterval(-$0) },
                                      runnerCPU: cpu, cpuSupported: true)
         }
@@ -39,7 +39,9 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
         if !hostDown {
             runners += [
                 obs("arm-02", .arm64, 4, 8, busy: true, job: a2, cpu: scenario == .failed ? 66 : 2, used: 6.8, ended: nil, host: scenario == .unreachable ? "mac-mini" : ""),
-                obs("x86-01", .x86, 2, 4, busy: false, job: nil, cpu: 1, used: 1.2, ended: 180, host: scenario == .unreachable ? "mac-mini" : ""),
+                // In the offline scenario this runner's listener stops responding after 10 seconds, like a crash.
+                obs("x86-01", .x86, 2, 4, busy: false, job: nil, cpu: 1, used: 1.2, ended: 180, host: scenario == .unreachable ? "mac-mini" : "",
+                    up: !(scenario == .offline && now.timeIntervalSince(t0) > 10)),
             ]
         }
         func q(_ id: Int, _ repo: String, _ wf: String, _ br: String, _ n: Int, _ arch: Arch, _ wait: Double,

@@ -27,6 +27,14 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().setBadgeCount(count) { _ in }
     }
 
+    /// One alert per confirmed outage; the tracker guarantees it is only called once per outage.
+    func notifyOffline(runner: String, host: String) {
+        let text = NotificationText.offline(runner: runner, host: host)
+        let c = UNMutableNotificationContent()
+        c.title = text.title; c.body = text.body; c.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "offline-\(runner)-\(Int(Date().timeIntervalSince1970))", content: c, trigger: nil))
+    }
+
     /// Without this, macOS silently drops notifications while Hangar is the frontmost app.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         [.banner, .list, .sound]
@@ -48,7 +56,7 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
                 ?? "\(job.title) on \(runner) failed at step \(step)."
         }
         c.sound = .default
-        let req = UNNotificationRequest(identifier: "\(jobId)-\(event.rawValue)", content: c, trigger: nil)
+        let req = UNNotificationRequest(identifier: "\(jobId)-\(event.rawValue)-\(Int(Date().timeIntervalSince1970))", content: c, trigger: nil)
         UNUserNotificationCenter.current().add(req)
         return true
     }

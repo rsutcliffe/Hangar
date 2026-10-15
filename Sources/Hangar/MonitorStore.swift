@@ -21,6 +21,7 @@ final class MonitorStore {
     private var runnerCPUHistory: [String: [Double]] = [:]      // last 3 per-runner CPU samples
     private var lastEnded: [String: Date] = [:]
     private var lastSeen: [String: Date] = [:]
+    private var outageTracker = OutageTracker()
     private var lastActive: [String: Date] = {
         (UserDefaults.standard.dictionary(forKey: "lastActive") as? [String: Double] ?? [:]).mapValues(Date.init(timeIntervalSince1970:))
     }()
@@ -88,6 +89,7 @@ final class MonitorStore {
                 if state == .stalled { notifier.notify(.stalled, jobId: j.id, runner: o.id, job: j, silentMinutes: silent) }
                 if state == .failed { notifier.notify(.failed, jobId: j.id, runner: o.id, job: j, silentMinutes: 0) }
             }
+            if outageTracker.observe(id: o.id, state: state) { notifier.notifyOffline(runner: o.id, host: o.host) }
             if o.listenerRunning || o.busy { lastActive[o.id] = now }
             if StaleRule.isStale(state: state, lastActive: lastActive[o.id], now: now) { continue }
             out.append(Runner(id: o.id, arch: o.arch, cpus: o.cpus, memoryGB: o.memoryGB, state: state,
@@ -99,7 +101,7 @@ final class MonitorStore {
         out += HostRetention.carryOver(previous: runners, current: out, unreachable: Set(snap.unreachable), lastSeen: lastSeen)
         runners = out
         lastUpdated = now
-        let problems = ProblemBadge.count(out)
+        let problems = ProblemBadge.count(out, outages: outageTracker.outages)
         NSApplication.shared.dockTile.badgeLabel = ProblemBadge.label(problems)
         notifier.setBadge(problems)
         UserDefaults.standard.set(lastActive.mapValues(\.timeIntervalSince1970), forKey: "lastActive")

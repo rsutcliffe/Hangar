@@ -439,3 +439,53 @@ final class TokenExpiryTests: XCTestCase {
         XCTAssertEqual(TokenExpiry.warning(expiry: exp, now: date(2027, 1, 13)), "The GitHub token has expired")
     }
 }
+
+final class OutageTests: XCTestCase {
+    func testAlertsOnceWhenOfflineForTwoPollsInARow() {
+        var t = OutageTracker()
+        XCTAssertFalse(t.observe(id: "a", state: .idle))
+        XCTAssertFalse(t.observe(id: "a", state: .offline))        // 1st offline poll: wait
+        XCTAssertTrue(t.observe(id: "a", state: .offline))         // 2nd: confirmed
+        XCTAssertFalse(t.observe(id: "a", state: .offline))        // still down: no repeat
+        XCTAssertEqual(t.outages, ["a"])
+    }
+    func testABlipThatRecoversNeverAlerts() {
+        var t = OutageTracker()
+        _ = t.observe(id: "a", state: .running)
+        XCTAssertFalse(t.observe(id: "a", state: .offline))
+        XCTAssertFalse(t.observe(id: "a", state: .running))
+        XCTAssertFalse(t.observe(id: "a", state: .offline))        // counter restarted
+        XCTAssertTrue(t.outages.isEmpty)
+    }
+    func testAnotherAlertOnlyAfterRecoveryAndAFreshOutage() {
+        var t = OutageTracker()
+        _ = t.observe(id: "a", state: .idle)
+        _ = t.observe(id: "a", state: .offline); XCTAssertTrue(t.observe(id: "a", state: .offline))
+        _ = t.observe(id: "a", state: .idle); XCTAssertTrue(t.outages.isEmpty)
+        _ = t.observe(id: "a", state: .offline); XCTAssertTrue(t.observe(id: "a", state: .offline))
+    }
+    func testDrainPauseRestartAndUnreachableNeverAlert() {
+        var t = OutageTracker()
+        for s: RunnerState in [.paused, .restarting, .unreachable] {
+            _ = t.observe(id: "a", state: .idle)
+            _ = t.observe(id: "a", state: s)
+            XCTAssertFalse(t.observe(id: "a", state: .offline), "after \(s)")      // forgot it was up
+            XCTAssertFalse(t.observe(id: "a", state: .offline), "after \(s)")
+        }
+    }
+    func testARunnerNeverSeenUpIsNotAnOutage() {
+        var t = OutageTracker()
+        XCTAssertFalse(t.observe(id: "stale", state: .offline)); XCTAssertFalse(t.observe(id: "stale", state: .offline))
+    }
+    func testOutagesCountTowardTheBadge() {
+        func r(_ id: String, _ s: RunnerState) -> Runner { Runner(id: id, arch: .arm64, cpus: 1, memoryGB: 1, state: s) }
+        let rs = [r("a", .offline), r("b", .offline), r("c", .stalled)]
+        XCTAssertEqual(ProblemBadge.count(rs), 1)
+        XCTAssertEqual(ProblemBadge.count(rs, outages: ["a"]), 2)
+    }
+    func testMessage() {
+        XCTAssertEqual(NotificationText.offline(runner: "m4-x", host: "mac-mini").body, "m4-x on mac-mini stopped responding.")
+        XCTAssertEqual(NotificationText.offline(runner: "m4-x", host: "").body, "m4-x stopped responding.")
+        XCTAssertEqual(NotificationText.offline(runner: "m4-x", host: "").title, "Runner offline")
+    }
+}
