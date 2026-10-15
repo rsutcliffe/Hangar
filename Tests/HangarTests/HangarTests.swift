@@ -489,3 +489,59 @@ final class OutageTests: XCTestCase {
         XCTAssertEqual(NotificationText.offline(runner: "m4-x", host: "").title, "Runner offline")
     }
 }
+
+final class UtilisationLogTests: XCTestCase {
+    let base = Date(timeIntervalSince1970: 1_800_000_000)      // an arbitrary instant
+
+    func testBucketsByHourAndKeepsPeaks() {
+        var log = UtilisationLog()
+        log.record(at: base, runners: [("a", true), ("b", false)], queueLength: 3, longestWait: 120)
+        log.record(at: base + 60, runners: [("a", false), ("b", false)], queueLength: 1, longestWait: 30)
+        let h = log.recent(count: 1, now: base)[0].bucket!
+        XCTAssertEqual(h.total, ["a": 2, "b": 2]); XCTAssertEqual(h.busy, ["a": 1])
+        XCTAssertEqual(h.peakQueue, 3); XCTAssertEqual(h.longestWaitSeconds, 120)
+        XCTAssertEqual(UtilisationLog.busyFraction(h, runner: "a")!, 0.5, accuracy: 0.001)
+        XCTAssertNil(UtilisationLog.busyFraction(h, runner: "zzz"))
+    }
+    func testNextHourIsAnotherBucketAndGapsAreNil() {
+        var log = UtilisationLog()
+        log.record(at: base, runners: [("a", true)], queueLength: 0, longestWait: 0)
+        log.record(at: base + 3 * 3600, runners: [("a", true)], queueLength: 0, longestWait: 0)
+        let r = log.recent(count: 4, now: base + 3 * 3600)
+        XCTAssertEqual(r.map { $0.bucket != nil }, [true, false, false, true])
+        XCTAssertEqual(r.count, 4)
+    }
+    func testRetentionDropsAnythingOlderThanEightDays() {
+        var log = UtilisationLog()
+        log.record(at: base, runners: [("a", true)], queueLength: 1, longestWait: 1)
+        log.record(at: base + 9 * 86_400, runners: [("a", true)], queueLength: 1, longestWait: 1)
+        XCTAssertEqual(log.hours.count, 1)
+        var kept = UtilisationLog()
+        kept.record(at: base, runners: [("a", true)], queueLength: 1, longestWait: 1)
+        kept.record(at: base + 7 * 86_400, runners: [("a", true)], queueLength: 1, longestWait: 1)
+        XCTAssertEqual(kept.hours.count, 2)
+    }
+    func testJSONRoundTripAndMissingFile() throws {
+        var log = UtilisationLog()
+        log.record(at: base, runners: [("a", true), ("b", false)], queueLength: 2, longestWait: 90)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("hangar-test-\(UUID().uuidString)")
+        let url = dir.appendingPathComponent("utilisation.json")
+        log.save(to: url)
+        XCTAssertEqual(UtilisationLog.load(from: url, now: base), log)
+        XCTAssertEqual(UtilisationLog.load(from: dir.appendingPathComponent("none.json"), now: base), UtilisationLog())
+        try? FileManager.default.removeItem(at: dir)
+    }
+    func testStoredDataHoldsNoJobContent() throws {
+        var log = UtilisationLog()
+        log.record(at: base, runners: [("m4-runner", true)], queueLength: 2, longestWait: 90)
+        let json = String(decoding: try JSONEncoder().encode(log), as: UTF8.self)
+        XCTAssertTrue(json.contains("m4-runner"))
+        for forbidden in ["repo", "branch", "workflow", "token", "http"] { XCTAssertFalse(json.contains(forbidden), forbidden) }
+    }
+    func testSummaryText() {
+        var b = HourBucket(); b.total = ["a": 4]; b.busy = ["a": 3]; b.peakQueue = 5; b.longestWaitSeconds = 600
+        XCTAssertEqual(CapacityView.summary(hours: [b, nil], runner: "a"), "75% busy")
+        XCTAssertEqual(CapacityView.summary(hours: [nil], runner: "a"), "not seen")
+        XCTAssertEqual(CapacityView.queueSummary([b]), "peak 5 queued · longest wait 10m")
+    }
+}

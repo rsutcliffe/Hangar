@@ -4,6 +4,16 @@
 
 A small macOS app (SwiftUI, Liquid Glass, macOS 26+) that shows the state of self-hosted GitHub Actions runners running in Colima VMs: runner and VM health, current job and step progress, CPU and memory load, stalls and failures, and the shared job queue. Stalls and failures raise a macOS notification. Each runner can be restarted or drained from the window.
 
+## Features
+
+- Per-runner cards for every runner found on this Mac, other Macs over SSH, and inside Colima VMs: state, job, step progress, CPU and memory.
+- Stalls are flagged only when the log is silent **and** the runner's own processes are idle; failures name the failed step and link to the job on GitHub.
+- The queue shows how long each job has waited and flags jobs that no online runner can take.
+- Notifications for stalls, failures and unexpected outages; a Dock badge counts runners that need attention.
+- Unreachable hosts stay visible, greyed out; a warning appears before the GitHub token expires.
+- Capacity window (Window ▸ Capacity, ⌥⌘C): 24-hour history of runner use and queue length, stored locally for 8 days.
+- Optional launch at login.
+
 ## Build
 
 Requires Xcode 26+, [XcodeGen](https://github.com/yonaskolb/XcodeGen) and [Colima](https://github.com/abiosoft/colima).

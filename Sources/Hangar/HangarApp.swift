@@ -15,6 +15,7 @@ struct HangarApp: App {
         var action: ((MonitorStore) -> Void)?
         if demo, args.contains("--scenario-restarting") { action = { $0.restart("arm-02") } }
         if demo, args.contains("--scenario-paused") { action = { $0.toggleDrain("x86-01") } }
+        if demo { s.recordHistory = false; s.loadDemoHistory() }
         s.start(demoAction: action)
         _store = State(initialValue: s)
     }
@@ -30,7 +31,21 @@ struct HangarApp: App {
                 Button("Refresh Now") { Task { await store.refresh() } }
                     .keyboardShortcut("r")
             }
+            CommandGroup(after: .windowList) {
+                CapacityMenuItem()
+            }
         }
+        Window("Capacity", id: "capacity") {
+            CapacityView(store: store)
+        }
+        .windowResizability(.contentSize)
         Settings { SettingsView(store: store) }
+    }
+}
+
+private struct CapacityMenuItem: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Capacity") { openWindow(id: "capacity") }.keyboardShortcut("c", modifiers: [.command, .option])
     }
 }

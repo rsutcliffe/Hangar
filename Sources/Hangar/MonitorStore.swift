@@ -22,6 +22,8 @@ final class MonitorStore {
     private var lastEnded: [String: Date] = [:]
     private var lastSeen: [String: Date] = [:]
     private var outageTracker = OutageTracker()
+    private(set) var utilisation = UtilisationLog.load()
+    var recordHistory = true
     private var lastActive: [String: Date] = {
         (UserDefaults.standard.dictionary(forKey: "lastActive") as? [String: Double] ?? [:]).mapValues(Date.init(timeIntervalSince1970:))
     }()
@@ -97,6 +99,12 @@ final class MonitorStore {
                               memUsedGB: o.memUsedGB, lastJobEndedAt: o.lastJobEndedAt ?? lastEnded[o.id],
                               failedAt: seen, host: o.host, standby: o.standby, runnerCPU: cpuAvg))
         }
+        if recordHistory {
+            let longest = queue.map { now.timeIntervalSince($0.queuedAt) }.max() ?? 0
+            utilisation.record(at: now, runners: out.filter { $0.state != .unreachable }.map { ($0.id, $0.job != nil && ($0.state == .running || $0.state == .stalled)) },
+                               queueLength: queue.count, longestWait: longest)
+            if Int(now.timeIntervalSince1970) / 60 % 5 == 0 || utilisation.hours.count <= 1 { utilisation.save() }
+        }
         for r in out { lastSeen[r.id] = now }
         out += HostRetention.carryOver(previous: runners, current: out, unreachable: Set(snap.unreachable), lastSeen: lastSeen)
         runners = out
@@ -110,6 +118,9 @@ final class MonitorStore {
     nonisolated static func average(_ xs: [Double], minimum: Int) -> Double? {
         xs.count >= minimum ? xs.reduce(0, +) / Double(xs.count) : nil
     }
+
+    /// Demo only: seed a day of readings so the Capacity window has something to show.
+    func loadDemoHistory() { utilisation = UtilisationLog.demo(now: Date()) }
 
     // MARK: actions
 
