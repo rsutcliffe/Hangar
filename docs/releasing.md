@@ -18,7 +18,6 @@ A release is a disk image, `Hangar-<version>.dmg`, signed with a Developer ID ce
 
 1. Add a `## <version> - <date>` section to `docs/CHANGELOG.md`. It becomes the GitHub release notes, so describe what changed for people using the app. A release with no section is refused.
 2. Set `MARKETING_VERSION` in `project.yml`, commit, and tag that commit: `git tag -a v0.1.0 -m "Don't Panic" && git push origin v0.1.0`. The first line of the tag message is the release's name (the title becomes "Hangar 0.1.0: Don't Panic"); releases so far are named after The Hitchhiker's Guide to the Galaxy.
-   ``.
 3. With the tag checked out and nothing uncommitted, run one of:
 
    ```bash
