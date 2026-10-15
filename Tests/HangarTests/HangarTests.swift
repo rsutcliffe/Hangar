@@ -654,13 +654,13 @@ final class HistoryFlushTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let live = MonitorStore(backend: DemoBackend(scenario: .stalled))
         live.recordHistory = true
-        live.flushHistory(to: url)
+        live.flushHistory(to: url, failuresTo: dir.appendingPathComponent("f.json"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
 
         let demo = MonitorStore(backend: DemoBackend(scenario: .stalled))
         demo.recordHistory = false
         let other = dir.appendingPathComponent("none.json")
-        demo.flushHistory(to: other)
+        demo.flushHistory(to: other, failuresTo: dir.appendingPathComponent("f2.json"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: other.path))
     }
 }
@@ -939,5 +939,64 @@ final class ChunkTests: XCTestCase {
         XCTAssertEqual([1, 2, 3].chunked(into: 3), [[1, 2, 3]])
         XCTAssertEqual([Int]().chunked(into: 3), [])
         XCTAssertEqual([1, 2].chunked(into: 0), [])
+    }
+}
+
+final class FailureLogTests: XCTestCase {
+    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    func rec(_ id: Int, runner: String = "a", step: String? = "Checkout", at: Date? = nil) -> FailureRecord {
+        FailureRecord(jobID: id, runner: runner, repo: "widgets", workflow: "CI", job: "unit", stepName: step, stepNumber: 2, at: at ?? t0, url: "https://github.com/example-org/widgets/actions/runs/1/job/\(id)")
+    }
+    func testRecordedOnceHoweverManyPollsSeeIt() {
+        var log = FailureLog()
+        XCTAssertTrue(log.record(rec(1), now: t0)); XCTAssertFalse(log.record(rec(1), now: t0 + 15)); XCTAssertFalse(log.record(rec(1), now: t0 + 30))
+        XCTAssertEqual(log.entries.count, 1)
+    }
+    func testNewestFirstAndFilterByRunner() {
+        var log = FailureLog()
+        log.record(rec(1, runner: "a", at: t0 - 100), now: t0); log.record(rec(2, runner: "b", at: t0 - 10), now: t0); log.record(rec(3, runner: "a", at: t0 - 50), now: t0)
+        XCTAssertEqual(log.recent(10).map(\.jobID), [2, 3, 1])
+        XCTAssertEqual(log.recent(10, runner: "a").map(\.jobID), [3, 1])
+        XCTAssertEqual(log.recent(1).map(\.jobID), [2])
+    }
+    func testRetentionThirtyDaysAndTwoHundredEntries() {
+        var log = FailureLog()
+        log.record(rec(1, at: t0 - 31 * 86_400), now: t0)
+        XCTAssertTrue(log.entries.isEmpty, "older than 30 days is dropped")
+        log.record(rec(2, at: t0 - 29 * 86_400), now: t0)
+        XCTAssertEqual(log.entries.count, 1)
+        for i in 100..<400 { log.record(rec(i, at: t0 - Double(i)), now: t0) }
+        XCTAssertEqual(log.entries.count, 200)
+        XCTAssertEqual(log.entries.first?.jobID, 100, "the newest are the ones kept")
+    }
+    func testReasonFallsBackToTheStepNumber() {
+        XCTAssertEqual(rec(1).reason, "Checkout")
+        XCTAssertEqual(rec(1, step: nil).reason, "step 2")
+        var r = rec(1, step: ""); r.stepNumber = nil
+        XCTAssertEqual(r.reason, "unknown step")
+        XCTAssertEqual(rec(1).title, "CI / unit")
+        var same = rec(1); same.job = "CI"; XCTAssertEqual(same.title, "CI")
+    }
+    func testRoundTripAndWhatIsStored() throws {
+        var log = FailureLog(); log.record(rec(1), now: t0)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("hangar-fail-\(UUID().uuidString)")
+        let url = dir.appendingPathComponent("failures.json"); defer { try? FileManager.default.removeItem(at: dir) }
+        log.save(to: url); XCTAssertEqual(FailureLog.load(from: url, now: t0), log)
+        XCTAssertEqual(FailureLog.load(from: dir.appendingPathComponent("none.json"), now: t0), FailureLog())
+        let json = String(decoding: try Data(contentsOf: url), as: UTF8.self)
+        for bad in ["token", "Bearer", "output", "log"] { XCTAssertFalse(json.contains(bad), bad) }
+        XCTAssertTrue(json.contains("Checkout"))
+    }
+    func testStoreRecordsAFailureFromAPollOnlyOnce() async {
+        let job = ActiveJob(id: 55, repo: "widgets", workflow: "CI", runNumber: 1, branch: "main", totalSteps: 5, currentStep: 2,
+                            startedAt: Date().addingTimeInterval(-300), lastOutputAt: Date().addingTimeInterval(-60), failedStep: 2, exitCode: nil,
+                            failedStepName: "Checkout", url: nil, jobName: "unit")
+        let obs = RunnerObservation(id: "runner-a", arch: .arm64, cpus: 2, memoryGB: 4, vmRunning: true, ghOnline: true, busy: false,
+                                    job: job, cpuPercent: 1, memUsedGB: 1, lastJobEndedAt: nil)
+        let snap = BackendSnapshot(runners: [obs], queue: [])
+        let s = await MainActor.run { () -> MonitorStore in let s = MonitorStore(backend: FakeBackend([.success(snap), .success(snap), .success(snap)])); s.recordHistory = false; return s }
+        for _ in 0..<3 { await s.refresh() }
+        let entries = await s.failures.entries
+        XCTAssertEqual(entries.count, 1); XCTAssertEqual(entries.first?.stepName, "Checkout"); XCTAssertEqual(entries.first?.runner, "runner-a")
     }
 }

@@ -31,6 +31,7 @@ final class MonitorStore {
     private var outageTracker = OutageTracker()
     private var failedRestarts: Set<String> = []
     private var jobHistory = JobHistory.load()
+    private(set) var failures = FailureLog.load()
     private var latestRunner: String?
     private var noticesSent: Set<String> = []
     private(set) var utilisation = UtilisationLog.load()
@@ -44,9 +45,10 @@ final class MonitorStore {
     init(backend: MonitorBackend) { self.backend = backend }
 
     /// Write the capacity history now (also called when the app quits or loses focus). Does nothing in demo mode.
-    func flushHistory(to url: URL? = UtilisationLog.defaultURL()) {
+    func flushHistory(to url: URL? = UtilisationLog.defaultURL(), failuresTo failuresURL: URL? = FailureLog.defaultURL()) {
         guard recordHistory else { return }
         utilisation.save(to: url)
+        failures.save(to: failuresURL)
     }
 
     func start(demoAction: ((MonitorStore) -> Void)? = nil) {
@@ -107,6 +109,9 @@ final class MonitorStore {
                 else if failureSeen[j.id] == nil {
                     failureSeen[j.id] = min(now, j.lastOutputAt)                // hold counts from when it failed
                     jobHistory.recordFailure(jobKey: j.historyKey, runner: o.id)
+                    failures.record(FailureRecord(jobID: j.id, runner: o.id, repo: j.repo, workflow: j.workflow, job: j.jobName,
+                                                  stepName: j.failedStepName, stepNumber: j.failedStep, at: min(now, j.lastOutputAt),
+                                                  url: j.url?.absoluteString), now: now)
                 }
             }
             let seen = obs.job.flatMap { failureSeen[$0.id] }
@@ -159,7 +164,7 @@ final class MonitorStore {
                                queueLength: queue.count, longestWait: longest)
             if Int(now.timeIntervalSince1970) / 60 % 5 == 0 || utilisation.hours.count <= 1 { utilisation.save() }
         }
-        if recordHistory { jobHistory.save() }
+        if recordHistory { jobHistory.save(); failures.save() }
         for r in out { lastSeen[r.id] = now }
         out += HostRetention.carryOver(previous: runners, current: out, unreachable: Set(snap.unreachable), lastSeen: lastSeen)
         runners = out
@@ -177,6 +182,7 @@ final class MonitorStore {
     /// Demo only: seed a day of readings so the Capacity window has something to show.
     func loadDemoHistory() {
         utilisation = UtilisationLog.demo(now: Date())
+        failures = FailureLog.demo(now: Date())
         jobHistory.durations[JobHistory.key(repo: "api-server", workflow: "build", job: "")] = [300, 290, 310, 305, 295, 300]
         jobHistory.streaks[JobHistory.streakKey(runner: "arm-02", jobKey: JobHistory.key(repo: "web", workflow: "test", job: ""))] = 3
     }

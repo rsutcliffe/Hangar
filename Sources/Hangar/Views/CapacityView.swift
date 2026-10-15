@@ -39,11 +39,36 @@ struct CapacityView: View {
                     Text("now").font(.system(size: 10)).foregroundStyle(Theme.muted)
                 }
             }
+            failuresSection
         }
         .padding(20)
         .frame(width: 560)
         .foregroundStyle(Theme.text)
         .accessibilityElement(children: .contain)
+    }
+
+    /// The latest recorded failures with the step that failed; each row opens the job on GitHub.
+    private var failuresSection: some View {
+        let recent = store.failures.recent(8)
+        return VStack(alignment: .leading, spacing: 6) {
+            Divider().overlay(Theme.line)
+            Text("Recent failures").font(.system(size: 12, weight: .semibold))
+            if recent.isEmpty {
+                Text("None recorded yet.").font(.system(size: 11)).foregroundStyle(Theme.muted)
+            } else {
+                ForEach(recent) { f in
+                    JobLink(url: f.url.flatMap(GitHubLink.safe)) {
+                        HStack(spacing: 8) {
+                            Text(Format.duration(Date().timeIntervalSince(f.at)) + " ago").frame(width: 52, alignment: .leading).foregroundStyle(Theme.muted)
+                            Text(f.runner).fontWeight(.semibold).frame(width: 110, alignment: .leading)
+                            Text("\(f.title) · \(f.reason)").foregroundStyle(Theme.problemText).lineLimit(1).truncationMode(.tail)
+                            Spacer(minLength: 0)
+                        }
+                        .font(.system(size: 11)).monospacedDigit()
+                    }
+                }
+            }
+        }
     }
 
     /// "62% busy" over the hours the runner was observed.
