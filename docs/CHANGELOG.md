@@ -2,6 +2,11 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.4 - 2026-10-15
+
+- The note on a runner that is behind now reads "Runner update available", and hovering it shows the installed and latest runner versions, so it is not mistaken for an update to Colima.
+- A low-disk warning for a Colima runner now says "VM disk", because it measures the VM's own disk. Runners that share a VM disk show the warning once instead of on every card, and the notification is sent once.
+
 ## 0.1.3 - 2026-10-15
 
 - When another Mac cannot be reached because macOS has not yet allowed Local Network access, Hangar now says so and offers a button that opens that setting, instead of showing a raw SSH error.
