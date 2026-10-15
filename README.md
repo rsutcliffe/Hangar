@@ -42,6 +42,25 @@ The GitHub token (fine-grained, `actions:read`) is stored in the macOS Keychain 
 xcodebuild -project Hangar.xcodeproj -scheme Hangar test CODE_SIGNING_ALLOWED=NO
 ```
 
+## Releasing
+
+`scripts/release.sh` builds a Release, signs it with your Developer ID (hardened runtime), packages a DMG, notarises it, staples the ticket and checks it with Gatekeeper, then prints the SHA-256. It publishes nothing.
+
+One-time setup (the app-specific password stays in your login Keychain, never in the repo):
+
+```bash
+xcrun notarytool store-credentials hangar-notary --apple-id <your Apple ID> --team-id <your team ID>
+```
+
+Then:
+
+```bash
+scripts/release.sh                  # full run, writes build/Hangar-<version>.dmg
+scripts/release.sh --skip-notarise  # signed only; Gatekeeper will still warn on other Macs
+```
+
+The signing team is read from `HANGAR_TEAM` or from `DEVELOPMENT_TEAM` in your git-ignored `Local.xcconfig`. The version comes from `MARKETING_VERSION` in `project.yml`.
+
 ## Licence
 
 Hangar is open source under the [Apache License 2.0](LICENSE). You may use, modify and redistribute it, including commercially, provided that you:
