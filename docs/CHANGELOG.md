@@ -2,6 +2,12 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.3 - 2026-10-15
+
+- When another Mac cannot be reached because macOS has not yet allowed Local Network access, Hangar now says so and offers a button that opens that setting, instead of showing a raw SSH error.
+- On first launch a short note explains the Notifications and Local Network permission prompts, and Hangar asks for Local Network access straight away so the prompt does not appear to come from a failure.
+- The window and Settings now tell you when a newer version of Hangar is available, with a link to download it. This can be turned off in Settings.
+
 ## 0.1.2 - 2026-10-15
 
 - Failed jobs are now remembered: the Capacity window lists recent failures with the runner, the job and the step that failed, and each one opens the job on GitHub. The last 200 failures from the past 30 days are kept on your Mac, as names and times only.
