@@ -14,6 +14,7 @@ protocol MonitorBackend: Sendable {
     func poll(config: Config) async throws -> BackendSnapshot
     func restart(_ id: String, config: Config) async throws
     func setRunnerService(_ id: String, running: Bool, config: Config) async throws
+    func diagnose(config: Config) async -> ConnectionReport
 }
 
 enum BackendError: Error, LocalizedError {
@@ -127,6 +128,39 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
     func setRunnerService(_ id: String, running: Bool, config: Config) async throws {
         let p = try place(id)
         try await hosts.setService(p.host, profile: p.profile, dir: p.dir, running: running)
+    }
+
+    /// Settings > Test connection. Reads only; the report never contains the token.
+    func diagnose(config: Config) async -> ConnectionReport {
+        var report = ConnectionReport()
+        var repos = Set<RepoRef>()
+        for h in config.hosts.map(HostSpec.init) {
+            let label = h.isLocal ? "this Mac" : (h.target ?? "host")
+            var count = 0
+            var failure: String?
+            do {
+                let vms = try await hosts.listVMs(h)
+                for p in config.profiles where vms[p]?.running == true {
+                    if let s = try? await hosts.vmSnapshot(h, profile: p) { count += s.runners.count; s.runners.forEach { repos.insert(RepoRef(owner: $0.owner, repo: $0.repo)) } }
+                }
+            } catch { failure = Self.reason(error) }
+            if let s = try? await hosts.nativeSnapshot(h) { failure = nil; count += s.runners.count; s.runners.forEach { repos.insert(RepoRef(owner: $0.owner, repo: $0.repo)) } }
+            report.lines.append(ConnectionReport.host(label, error: count == 0 ? failure : nil, runners: count))
+        }
+        guard let token = Keychain.token() else { report.lines.append(ConnectionReport.noToken); return report }
+        for r in repos.sorted(by: { $0.repo < $1.repo }) {
+            do { _ = try await github.runners(owner: r.owner, repo: r.repo, token: token); report.lines.append(ConnectionReport.repo(r.repo, error: nil)) }
+            catch { report.lines.append(ConnectionReport.repo(r.repo, error: error)) }
+        }
+        if repos.isEmpty { report.lines.append(.init(ok: false, text: "No repos discovered, so the token could not be checked.")) }
+        return report
+    }
+
+    private static func reason(_ e: Error) -> String {
+        if case ShellError.failed(_, let m) = e { return m.split(separator: "\n").last.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? "failed" }
+        if case ShellError.timedOut = e { return "timed out" }
+        if case ShellError.notFound(let p) = e { return "\(p) not found" }
+        return "failed"
     }
 
     struct RepoRef: Hashable, Sendable { var owner: String; var repo: String }

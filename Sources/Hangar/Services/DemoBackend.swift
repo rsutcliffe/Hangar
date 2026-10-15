@@ -64,4 +64,8 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
 
     func restart(_ id: String, config: Config) async throws { lock.withLock { restarted[id] = Date() } }
     func setRunnerService(_ id: String, running: Bool, config: Config) async throws {}
+    func diagnose(config: Config) async -> ConnectionReport {
+        ConnectionReport(lines: [ConnectionReport.host("this Mac", error: nil, runners: 1), ConnectionReport.host("mac-mini", error: "ssh: connect to host mac-mini port 22: Operation timed out", runners: 0),
+                                 ConnectionReport.repo("widgets", error: nil), ConnectionReport.repo("gadgets", error: GitHubError.http(403))])
+    }
 }

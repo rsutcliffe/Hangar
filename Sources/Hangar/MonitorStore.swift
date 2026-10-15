@@ -140,6 +140,8 @@ final class MonitorStore {
     /// Demo only: seed a day of readings so the Capacity window has something to show.
     func loadDemoHistory() { utilisation = UtilisationLog.demo(now: Date()) }
 
+    func diagnose() async -> ConnectionReport { await backend.diagnose(config: Config.load()) }
+
     // MARK: actions
 
     func restart(_ id: String) {

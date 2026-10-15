@@ -10,6 +10,8 @@ struct SettingsView: View {
     @State private var hasToken = Keychain.token() != nil
     @State private var loginItem = LoginItemModel()
     @State private var badgeAllowed = true
+    @State private var report: ConnectionReport?
+    @State private var testing = false
 
     var body: some View {
         Form {
@@ -46,13 +48,25 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+            Section("Connection") {
+                Button(testing ? "Testing…" : "Test connection") {
+                    testing = true
+                    Task { report = await store.diagnose(); testing = false }
+                }.disabled(testing)
+                if let report {
+                    ForEach(Array(report.lines.enumerated()), id: \.offset) { _, l in
+                        Label(l.text, systemImage: l.ok ? "checkmark.circle" : "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(l.ok ? Color.secondary : Theme.problemText)
+                    }
+                }
+            }
             Section("Monitoring") {
                 Stepper("Stall after \(stallMinutes) min", value: $stallMinutes, in: 1...120)
                 Stepper("Poll every \(pollSeconds) s", value: $pollSeconds, in: 5...300, step: 5)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480)
+        .frame(width: 480, height: 820)
         .onAppear { loginItem.refresh(); Task { badgeAllowed = await NotificationService.badgeAllowed() } }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in loginItem.refresh(); Task { badgeAllowed = await NotificationService.badgeAllowed() } }
     }

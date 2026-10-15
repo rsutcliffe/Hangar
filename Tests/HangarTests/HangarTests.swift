@@ -588,3 +588,29 @@ final class RateLimitTests: XCTestCase {
         XCTAssertEqual(GitHubError.rateLimited(until: nil).errorDescription, "GitHub rate limit reached")
     }
 }
+
+final class ConnectionReportTests: XCTestCase {
+    func testHostLines() {
+        XCTAssertTrue(ConnectionReport.host("mac-mini", error: nil, runners: 3).ok)
+        XCTAssertEqual(ConnectionReport.host("mac-mini", error: nil, runners: 1).text, "mac-mini: reachable, 1 runner found.")
+        XCTAssertFalse(ConnectionReport.host("mac-mini", error: nil, runners: 0).ok)
+        let down = ConnectionReport.host("mac-mini", error: "timed out", runners: 0)
+        XCTAssertFalse(down.ok); XCTAssertTrue(down.text.contains("SSH key login"))
+    }
+    func testRepoLinesNameWhatToFix() {
+        XCTAssertTrue(ConnectionReport.repo("widgets", error: nil).ok)
+        XCTAssertTrue(ConnectionReport.repo("widgets", error: GitHubError.http(403)).text.contains("Administration: read"))
+        XCTAssertTrue(ConnectionReport.repo("widgets", error: GitHubError.http(404)).text.contains("not found"))
+        XCTAssertTrue(ConnectionReport.repo("widgets", error: GitHubError.unauthorized).text.contains("rejected"))
+        XCTAssertTrue(ConnectionReport.repo("widgets", error: GitHubError.rateLimited(until: nil)).text.contains("rate limit"))
+    }
+    func testAllOKAndNoSecretsInAnyLine() {
+        var r = ConnectionReport(lines: [ConnectionReport.host("a", error: nil, runners: 1), ConnectionReport.repo("w", error: nil)])
+        XCTAssertTrue(r.allOK)
+        r.lines.append(ConnectionReport.noToken)
+        XCTAssertFalse(r.allOK)
+        XCTAssertFalse(ConnectionReport().allOK)
+        let all = (r.lines.map(\.text) + [ConnectionReport.repo("w", error: GitHubError.unauthorized).text]).joined()
+        for bad in ["ghp_", "github_pat_", "Bearer"] { XCTAssertFalse(all.contains(bad)) }
+    }
+}
