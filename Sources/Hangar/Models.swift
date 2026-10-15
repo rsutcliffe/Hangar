@@ -65,6 +65,8 @@ struct Runner: Identifiable, Equatable, Sendable {
     var restartFailed = false
     var diskFreeKB: Int?
     var diskUsedPct: Int?
+    /// The figures are for a Colima VM's disk, which its runners share (not a Mac's own disk).
+    var diskIsVM = false
     var version: String?
     var latestVersion: String?
     /// Times longer than this job usually takes, when notably long.
@@ -77,7 +79,7 @@ struct Runner: Identifiable, Equatable, Sendable {
     /// Extra lines for the card, most important first.
     var notes: [Note] {
         var n: [Note] = []
-        if let d = DiskRule.warning(freeKB: diskFreeKB, usedPct: diskUsedPct) { n.append(Note(text: d, urgent: true)) }
+        if let d = DiskRule.warning(freeKB: diskFreeKB, usedPct: diskUsedPct, vm: diskIsVM) { n.append(Note(text: d, urgent: true)) }
         if let s = failStreak { n.append(Note(text: "Failed \(s) times in a row here", urgent: true)) }
         if let f = longRunFactor { n.append(Note(text: String(format: "Running %.1fx longer than usual", f), urgent: true)) }
         if let v = version, let l = latestVersion, VersionCheck.isBehind(current: v, latest: l) { n.append(Note(text: "Runner update available: \(l)", urgent: false, help: "GitHub Actions runner \(v) is installed; \(l) is the latest release")) }

@@ -50,14 +50,15 @@ enum DiskRule {
     static let minFreeGB = 10.0
     static let maxUsedPct = 90
 
-    static func warning(freeKB: Int?, usedPct: Int?) -> String? {
+    static func warning(freeKB: Int?, usedPct: Int?, vm: Bool = false) -> String? {
         guard let freeKB else { return nil }
         let free = Double(freeKB) / 1_048_576
         let low = free < minFreeGB || (usedPct ?? 0) >= maxUsedPct
         guard low else { return nil }
         // Short enough for a card: free space when it is the problem, otherwise how full the disk is.
-        if free < minFreeGB { return String(format: "Disk low: %.1f GB free", free) }
-        return "Disk \(usedPct ?? 0)% full"
+        let name = vm ? "VM disk" : "Disk"
+        if free < minFreeGB { return String(format: "\(name) low: %.1f GB free", free) }
+        return "\(name) \(usedPct ?? 0)% full"
     }
 }
 

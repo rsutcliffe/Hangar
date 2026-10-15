@@ -675,6 +675,24 @@ final class DiskRuleTests: XCTestCase {
         XCTAssertNil(DiskRule.warning(freeKB: 10_485_760, usedPct: 10))             // exactly 10 GB is fine
         XCTAssertNil(DiskRule.warning(freeKB: nil, usedPct: 99))                    // unknown: say nothing
     }
+    func testVMDiskIsNamedAsTheVMDisk() {
+        XCTAssertEqual(DiskRule.warning(freeKB: 8_900_000, usedPct: 54, vm: true), "VM disk low: 8.5 GB free")
+        XCTAssertEqual(DiskRule.warning(freeKB: 50_000_000, usedPct: 92, vm: true), "VM disk 92% full")
+    }
+    func testRunnersSharingADiskShowItsWarningOnlyOnce() async {
+        func obs(_ id: String, host: String, free: Int) -> RunnerObservation {
+            RunnerObservation(id: id, arch: .arm64, cpus: 2, memoryGB: 4, vmRunning: true, ghOnline: true, busy: false, host: host,
+                              job: nil, cpuPercent: 1, memUsedGB: 1, lastJobEndedAt: nil, diskFreeKB: free, diskUsedPct: 54)
+        }
+        let snap = BackendSnapshot(runners: [obs("a", host: "box", free: 8_900_000), obs("b", host: "box", free: 8_900_000),
+                                             obs("c", host: "other", free: 8_900_000)], queue: [])
+        let s = await MainActor.run { () -> MonitorStore in let s = MonitorStore(backend: FakeBackend([.success(snap)])); s.recordHistory = false; return s }
+        await s.refresh()
+        let notes = await s.runners.sorted { $0.id < $1.id }.map { $0.notes.map(\.text) }
+        XCTAssertEqual(notes[0], ["VM disk low: 8.5 GB free"])
+        XCTAssertEqual(notes[1], [])                                           // same host, same figures
+        XCTAssertEqual(notes[2], ["VM disk low: 8.5 GB free"])                  // a different host is its own disk
+    }
     func testProbeLineCarriesDiskAndVersion() {
         let out = """
         H|vm
