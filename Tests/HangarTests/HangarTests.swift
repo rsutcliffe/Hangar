@@ -333,3 +333,48 @@ final class FailureDetailTests: XCTestCase {
         XCTAssertNil(GitHubLink.safe(""))
     }
 }
+
+private final class FakeLoginItem: LoginItemService {
+    var state: LoginItemState = .off
+    var failNext = false
+    var openedSettings = false
+    func set(_ on: Bool) throws {
+        if failNext { failNext = false; throw NSError(domain: "t", code: 1, userInfo: [NSLocalizedDescriptionKey: "denied"]) }
+        state = on ? .on : .off
+    }
+    func openLoginItemsSettings() { openedSettings = true }
+}
+
+@MainActor
+final class LoginItemTests: XCTestCase {
+    func testToggleFollowsTheSystemState() {
+        let f = FakeLoginItem(); let m = LoginItemModel(service: f)
+        XCTAssertFalse(m.isOn)
+        m.setOn(true); XCTAssertTrue(m.isOn); XCTAssertEqual(m.state, .on)
+        m.setOn(false); XCTAssertFalse(m.isOn)
+    }
+    func testChangeMadeInSystemSettingsIsPickedUpOnRefresh() {
+        let f = FakeLoginItem(); let m = LoginItemModel(service: f)
+        f.state = .needsApproval; m.refresh()
+        XCTAssertTrue(m.isOn); XCTAssertEqual(m.state, .needsApproval)
+        m.openSettings(); XCTAssertTrue(f.openedSettings)
+        f.state = .off; m.refresh(); XCTAssertFalse(m.isOn)
+    }
+    func testFailureIsShownAndStateStaysTrue() {
+        let f = FakeLoginItem(); f.failNext = true
+        let m = LoginItemModel(service: f)
+        m.setOn(true)
+        XCTAssertNotNil(m.error); XCTAssertFalse(m.isOn)
+    }
+}
+
+final class ProblemBadgeTests: XCTestCase {
+    func r(_ s: RunnerState) -> Runner { Runner(id: "x", arch: .arm64, cpus: 1, memoryGB: 1, state: s) }
+    func testCountsStalledAndFailedOnly() {
+        XCTAssertEqual(ProblemBadge.count([r(.running), r(.stalled), r(.failed), r(.idle), r(.paused), r(.offline), r(.restarting)]), 2)
+        XCTAssertEqual(ProblemBadge.count([]), 0)
+    }
+    func testLabelIsNilAtZero() {
+        XCTAssertNil(ProblemBadge.label(0)); XCTAssertEqual(ProblemBadge.label(3), "3")
+    }
+}

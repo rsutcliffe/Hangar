@@ -7,6 +7,8 @@ struct SettingsView: View {
     @AppStorage(Config.Key.pollSeconds) private var pollSeconds = 15
     @State private var token = ""
     @State private var hasToken = Keychain.token() != nil
+    @State private var loginItem = LoginItemModel()
+    @State private var badgeAllowed = true
 
     var body: some View {
         Form {
@@ -25,6 +27,21 @@ struct SettingsView: View {
             Section("Colima") {
                 TextField("Profiles (comma separated)", text: $profiles)
             }
+            Section("General") {
+                Toggle("Launch at login", isOn: Binding(get: { loginItem.isOn }, set: { loginItem.setOn($0) }))
+                if loginItem.state == .needsApproval {
+                    HStack {
+                        Text("Allow Hangar in System Settings ▸ General ▸ Login Items.").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Open Login Items") { loginItem.openSettings() }.controlSize(.small)
+                    }
+                }
+                if let e = loginItem.error { Text(e).font(.caption).foregroundStyle(.red) }
+                if !badgeAllowed {
+                    Text("The Dock badge is off. Turn on “Badge app icon” for Hangar in System Settings ▸ Notifications.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section("Monitoring") {
                 Stepper("Stall after \(stallMinutes) min", value: $stallMinutes, in: 1...120)
                 Stepper("Poll every \(pollSeconds) s", value: $pollSeconds, in: 5...300, step: 5)
@@ -32,6 +49,8 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 480)
+        .onAppear { loginItem.refresh(); Task { badgeAllowed = await NotificationService.badgeAllowed() } }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in loginItem.refresh(); Task { badgeAllowed = await NotificationService.badgeAllowed() } }
     }
 
     private func saveToken() {

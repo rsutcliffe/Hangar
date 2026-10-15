@@ -11,9 +11,20 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     func requestAuthorization(onDenied: @escaping @MainActor () -> Void) {
         let center = UNUserNotificationCenter.current()
         center.delegate = self
-        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             if !granted { Task { @MainActor in onDenied() } }
         }
+    }
+
+    /// False when the user has switched off "Badge app icon" for Hangar, which hides the Dock badge.
+    nonisolated static func badgeAllowed() async -> Bool {
+        let s = await UNUserNotificationCenter.current().notificationSettings()
+        return s.authorizationStatus != .denied && s.badgeSetting != .disabled
+    }
+
+    /// The Dock badge goes through the notification centre too, so it follows the user's "Badge app icon" setting.
+    func setBadge(_ count: Int) {
+        UNUserNotificationCenter.current().setBadgeCount(count) { _ in }
     }
 
     /// Without this, macOS silently drops notifications while Hangar is the frontmost app.

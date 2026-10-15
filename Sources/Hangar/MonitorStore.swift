@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -91,6 +92,9 @@ final class MonitorStore {
         }
         runners = out
         lastUpdated = now
+        let problems = ProblemBadge.count(out)
+        NSApplication.shared.dockTile.badgeLabel = ProblemBadge.label(problems)
+        notifier.setBadge(problems)
         UserDefaults.standard.set(lastActive.mapValues(\.timeIntervalSince1970), forKey: "lastActive")
     }
 
