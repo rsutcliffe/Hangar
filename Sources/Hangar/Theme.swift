@@ -15,8 +15,9 @@ enum Theme {
     static let problemText = Color("ProblemText")
     static let onProblem = Color("OnProblem")
 
-    /// Follows the system window corner (concentric with the window); 26pt only if the system gives none.
-    static let windowShape = ConcentricRectangle(corners: .concentric(minimum: .fixed(windowRadius)), isUniform: true)
-    static let windowRadius: CGFloat = 26
-    static let cardRadius: CGFloat = 18
+    /// The window's own corner is drawn by the system, so the glass is a plain rectangle that the system clips.
+    /// (A fixed or ConcentricRectangle radius did not follow it: measured 26pt against ~17pt on standard windows.)
+    static let windowShape = Rectangle()
+    /// Inside the ~17pt window corner with 14pt padding; the handover's 18pt would be rounder than the window itself.
+    static let cardRadius: CGFloat = 12
 }
