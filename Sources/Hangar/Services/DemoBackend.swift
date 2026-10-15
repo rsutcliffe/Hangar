@@ -36,12 +36,14 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
             obs("arm-02", .arm64, 4, 8, busy: true, job: a2, cpu: scenario == .failed ? 66 : 2, used: 6.8, ended: nil),
             obs("x86-01", .x86, 2, 4, busy: false, job: nil, cpu: 1, used: 1.2, ended: 180),
         ]
-        func q(_ id: Int, _ repo: String, _ wf: String, _ br: String, _ n: Int, _ arch: Arch, _ wait: Double) -> QueuedJob {
-            QueuedJob(id: id, repo: repo, workflow: wf, branch: br, runNumber: n, arch: arch, queuedAt: now.addingTimeInterval(-wait))
+        func q(_ id: Int, _ repo: String, _ wf: String, _ br: String, _ n: Int, _ arch: Arch, _ wait: Double,
+               eligible: [String]? = nil, missing: [String] = []) -> QueuedJob {
+            QueuedJob(id: id, repo: repo, workflow: wf, branch: br, runNumber: n, arch: arch, queuedAt: now.addingTimeInterval(-wait),
+                      labels: ["self-hosted"], eligible: eligible, missingLabels: missing)
         }
         let queue = [
             q(1, "api-server", "Lint", "main", 483, .arm64, 120), q(2, "web", "E2E tests", "feat/checkout", 1191, .arm64, 240),
-            q(3, "api-server", "Build", "fix/auth-timeout", 484, .arm64, 360), q(4, "ios-app", "Unit tests", "main", 77, .x86, 30),
+            q(3, "api-server", "Build", "fix/auth-timeout", 484, .arm64, 360, eligible: ["arm-01"]), q(4, "ios-app", "Unit tests", "main", 77, .x86, 30, eligible: [], missing: ["xcode-26"]),
             q(5, "web", "Lint", "main", 1192, .arm64, 20),
         ]
         return BackendSnapshot(runners: runners, queue: queue)

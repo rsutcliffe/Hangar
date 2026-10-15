@@ -56,7 +56,9 @@ struct MonitorWindow: View {
             Text("Hangar").font(.system(size: 13, weight: .semibold))
             Spacer()
             let a = store.queue.count(for: .arm64), x = store.queue.count(for: .x86)
-            (Text("\(store.queue.count)").fontWeight(.bold) + Text(" queued · arm64 \(a) · x86 \(x)").foregroundColor(Theme.muted))
+            let stuck = store.queue.stuckCount
+            (Text("\(store.queue.count)").fontWeight(.bold) + Text(" queued · arm64 \(a) · x86 \(x)").foregroundColor(Theme.muted)
+                + (stuck > 0 ? Text(" · \(stuck) stuck").foregroundColor(Theme.problemText).fontWeight(.semibold) : Text("")))
                 .font(.system(size: 12)).monospacedDigit()
                 .padding(.vertical, 4).padding(.horizontal, 10)
                 .background(Theme.pill, in: Capsule())

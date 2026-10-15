@@ -18,6 +18,8 @@ enum GitHubError: Error, Equatable, LocalizedError {
 
 struct GHRunner: Equatable, Sendable {
     var name: String; var online: Bool; var busy: Bool; var labels: [String]
+    /// The repo this runner is registered to (repo-level runners only take that repo's jobs).
+    var repo = ""
     /// A fallback runner, marked with a "standby" label (e.g. `macbook-standby`). GitHub labels are case-insensitive.
     var isStandby: Bool { labels.contains { $0.localizedCaseInsensitiveContains("standby") } }
 }

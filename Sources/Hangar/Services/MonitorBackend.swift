@@ -92,7 +92,8 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                 group.addTask {
                     async let rs = github.runners(owner: r.owner, repo: r.repo, token: token)
                     async let js = github.jobs(owner: r.owner, repo: r.repo, token: token)
-                    return try await (rs, js)
+                    let (runners, jobs) = try await (rs, js)
+                    return (runners.map { var x = $0; x.repo = r.repo; return x }, jobs)
                 }
             }
             var allR: [GHRunner] = [], allJ: [GHJob] = []
@@ -144,7 +145,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                                              runnerCPU: f.runnerCPU, cpuSupported: f.cpuSeconds != nil))
             }
         }
-        return BackendSnapshot(runners: obs, queue: queue(from: jobs))
+        return BackendSnapshot(runners: obs, queue: queue(from: jobs, runners: runners))
     }
 
     static func activeJob(_ j: GHJob, lastOutput: Date?) -> ActiveJob {
@@ -158,15 +159,20 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                          failedStep: j.conclusion == "failure" ? (failedStep ?? current) : nil, exitCode: nil)
     }
 
-    static func queue(from jobs: [GHJob]) -> [QueuedJob] {
+    static func queue(from jobs: [GHJob], runners: [GHRunner]? = nil) -> [QueuedJob] {
         var seen = Set<Int>()
         return jobs.filter { $0.status == "queued" && $0.labels.contains("self-hosted") && seen.insert($0.id).inserted }
             .sorted { $0.createdAt < $1.createdAt }
             .map { j in
                 let l = j.labels.map { $0.lowercased() }
                 let arch: Arch = l.contains(where: { $0.contains("x64") || $0.contains("x86") }) ? .x86 : .arm64
-                return QueuedJob(id: j.id, repo: j.repo, workflow: j.workflow, branch: j.branch,
-                                 runNumber: j.runNumber, arch: arch, queuedAt: j.createdAt, job: j.name)
+                var q = QueuedJob(id: j.id, repo: j.repo, workflow: j.workflow, branch: j.branch,
+                                  runNumber: j.runNumber, arch: arch, queuedAt: j.createdAt, job: j.name, labels: j.labels)
+                if let runners {
+                    q.eligible = QueueAnalysis.eligible(labels: j.labels, repo: j.repo, runners: runners)
+                    if q.eligible?.isEmpty == true { q.missingLabels = QueueAnalysis.missingLabels(labels: j.labels, repo: j.repo, runners: runners) }
+                }
+                return q
             }
     }
 }

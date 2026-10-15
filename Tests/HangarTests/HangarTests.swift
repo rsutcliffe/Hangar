@@ -250,3 +250,48 @@ final class RunnerCPUTests: XCTestCase {
         XCTAssertEqual(Double(out)!, 99.5, accuracy: 0.01)     // 2.5 + 90 + 7; the unrelated tree is excluded
     }
 }
+
+final class QueueAnalysisTests: XCTestCase {
+    func runner(_ n: String, online: Bool = true, repo: String = "ts", _ labels: [String]) -> GHRunner {
+        var r = GHRunner(name: n, online: online, busy: false, labels: labels); r.repo = repo; return r
+    }
+    let rs: [GHRunner] = []
+    func testSubsetMatchIsCaseInsensitive() {
+        let runners = [runner("a", ["self-hosted", "Linux", "ARM64", "tenantsafe-ci", "tenantsafe-supabase"]),
+                       runner("b", ["self-hosted", "Linux", "ARM64", "tenantsafe-ci"])]
+        XCTAssertEqual(QueueAnalysis.eligible(labels: ["self-hosted", "linux", "tenantsafe-ci"], repo: "ts", runners: runners), ["a", "b"])
+        XCTAssertEqual(QueueAnalysis.eligible(labels: ["self-hosted", "linux", "tenantsafe-supabase"], repo: "ts", runners: runners), ["a"])
+    }
+    func testOfflineRunnersNeverCount() {
+        let runners = [runner("a", online: false, ["self-hosted", "tenantsafe-supabase"]), runner("b", ["self-hosted"])]
+        XCTAssertEqual(QueueAnalysis.eligible(labels: ["self-hosted", "tenantsafe-supabase"], repo: "ts", runners: runners), [])
+        XCTAssertEqual(QueueAnalysis.missingLabels(labels: ["self-hosted", "tenantsafe-supabase"], repo: "ts", runners: runners), ["tenantsafe-supabase"])
+    }
+    func testRunnersOnlyServeTheirOwnRepo() {
+        let runners = [runner("a", repo: "hoci", ["self-hosted"])]
+        XCTAssertEqual(QueueAnalysis.eligible(labels: ["self-hosted"], repo: "ts", runners: runners), [])
+        XCTAssertEqual(QueueAnalysis.eligible(labels: ["self-hosted"], repo: "hoci", runners: runners), ["a"])
+    }
+    func testQueueCarriesEligibilityAndStuckCount() {
+        let now = Date()
+        func job(_ id: Int, _ labels: [String]) -> GHJob {
+            GHJob(id: id, runId: 1, repo: "ts", workflow: "CI", runNumber: 1, branch: "main", status: "queued", conclusion: nil,
+                  labels: labels, runnerName: nil, createdAt: now, startedAt: nil, completedAt: nil, steps: [], name: "j\(id)")
+        }
+        let runners = [runner("a", ["self-hosted", "Linux", "x"])]
+        let q = LiveBackend.queue(from: [job(1, ["self-hosted", "linux", "x"]), job(2, ["self-hosted", "gpu"])], runners: runners)
+        XCTAssertEqual(q.map(\.eligible), [["a"], []])
+        XCTAssertEqual(q.stuckCount, 1)
+        XCTAssertEqual(q[1].missingLabels, ["gpu"])
+        XCTAssertNil(LiveBackend.queue(from: [job(3, ["self-hosted"])], runners: nil)[0].eligible)    // unknown, not "stuck"
+    }
+    func testNotes() {
+        var j = QueuedJob(id: 1, repo: "ts", workflow: "CI", branch: "main", runNumber: 1, arch: .arm64, queuedAt: Date(), labels: ["self-hosted"])
+        XCTAssertNil(UpNextCard.note(for: j))
+        j.eligible = ["m4-a"]
+        XCTAssertEqual(UpNextCard.note(for: j)?.text, "Only m4-a can run this")
+        j.eligible = ["a", "b"]; XCTAssertNil(UpNextCard.note(for: j))
+        j.eligible = []; j.missingLabels = ["gpu"]
+        XCTAssertEqual(UpNextCard.note(for: j)?.text, "No online runner has: gpu"); XCTAssertEqual(UpNextCard.note(for: j)?.stuck, true)
+    }
+}

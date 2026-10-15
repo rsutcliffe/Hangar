@@ -68,10 +68,32 @@ struct QueuedJob: Identifiable, Equatable, Sendable {
     var arch: Arch
     var queuedAt: Date
     var job = ""
+    var labels: [String] = []
+    /// Names of online runners that could take this job; nil when runner data was unavailable.
+    var eligible: [String]? = nil
+    /// Job labels that no online runner of the repo has (empty if each label exists but not all on one runner).
+    var missingLabels: [String] = []
+
+    var isStuck: Bool { eligible?.isEmpty == true }
+}
+
+enum QueueAnalysis {
+    /// Online runners registered to the job's repo whose labels include every label the job asks for (case-insensitive).
+    static func eligible(labels: [String], repo: String, runners: [GHRunner]) -> [String] {
+        let need = Set(labels.map { $0.lowercased() })
+        return runners.filter { $0.online && ($0.repo.isEmpty || $0.repo == repo) && need.isSubset(of: Set($0.labels.map { $0.lowercased() })) }
+            .map(\.name).sorted()
+    }
+
+    static func missingLabels(labels: [String], repo: String, runners: [GHRunner]) -> [String] {
+        let have = Set(runners.filter { $0.online && ($0.repo.isEmpty || $0.repo == repo) }.flatMap { $0.labels.map { $0.lowercased() } })
+        return labels.filter { !have.contains($0.lowercased()) }
+    }
 }
 
 extension [QueuedJob] {
     func count(for arch: Arch) -> Int { filter { $0.arch == arch }.count }
+    var stuckCount: Int { filter(\.isStuck).count }
 }
 
 extension Runner {
