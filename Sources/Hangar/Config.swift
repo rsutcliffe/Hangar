@@ -6,6 +6,7 @@ struct Config: Equatable, Sendable {
         static let profiles = "profiles"
         static let hosts = "hosts"
         static let quietEnabled = "quietEnabled"
+        static let checkUpdates = "checkUpdates"
         static let quietStart = "quietStart"
         static let quietEnd = "quietEnd"
         static let stallMinutes = "stallMinutes"
@@ -18,6 +19,8 @@ struct Config: Equatable, Sendable {
     var hosts: [String] = ["local"]
     var stallMinutes = 10
     var quietEnabled = false
+    /// Look for a newer Hangar release on GitHub (on unless switched off).
+    var checkUpdates = true
     var quietStart = 22
     var quietEnd = 7
     var pollSeconds = 15
@@ -34,6 +37,7 @@ struct Config: Equatable, Sendable {
         let stall = d.integer(forKey: Key.stallMinutes)
         if stall > 0 { c.stallMinutes = stall }
         c.quietEnabled = d.bool(forKey: Key.quietEnabled)
+        if d.object(forKey: Key.checkUpdates) != nil { c.checkUpdates = d.bool(forKey: Key.checkUpdates) }
         if d.object(forKey: Key.quietStart) != nil { c.quietStart = min(23, max(0, d.integer(forKey: Key.quietStart))) }
         if d.object(forKey: Key.quietEnd) != nil { c.quietEnd = min(23, max(0, d.integer(forKey: Key.quietEnd))) }
         let poll = d.integer(forKey: Key.pollSeconds)

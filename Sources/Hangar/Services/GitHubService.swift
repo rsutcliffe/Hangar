@@ -69,6 +69,27 @@ actor GitHubService {
     }
 
     private var latestRunner: (version: String, fetched: Date)?
+    private var latestApp: (release: AppRelease, fetched: Date)?
+
+    /// Latest published Hangar release, from the public endpoint with no token, cached for six hours.
+    func latestAppRelease(now: Date = Date()) async -> AppRelease? {
+        if let c = latestApp, now.timeIntervalSince(c.fetched) < 6 * 3600 { return c.release }
+        guard let url = URL(string: "https://api.github.com/repos/\(AppInfo.repo)/releases/latest") else { return latestApp?.release }
+        var req = URLRequest(url: url, timeoutInterval: 10)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        guard let (data, resp) = try? await session.data(for: req), (resp as? HTTPURLResponse)?.statusCode == 200,
+              let r = Self.parseAppRelease(data) else { return latestApp?.release }
+        latestApp = (r, now)
+        return r
+    }
+
+    static func parseAppRelease(_ data: Data) -> AppRelease? {
+        guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tag = j["tag_name"] as? String, VersionCheck.parse(tag) != nil,
+              j["draft"] as? Bool != true, j["prerelease"] as? Bool != true,
+              let page = (j["html_url"] as? String).flatMap(GitHubLink.safe) else { return nil }
+        return AppRelease(version: tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV")), name: j["name"] as? String ?? "", url: page)
+    }
 
     /// Latest actions/runner release tag, from a public endpoint, cached for six hours. nil if it cannot be read.
     func latestRunnerVersion(now: Date = Date()) async -> String? {
@@ -148,5 +169,23 @@ actor GitHubService {
                          createdAt: created, startedAt: date(j["started_at"]), completedAt: date(j["completed_at"]), steps: steps,
                          name: j["name"] as? String ?? "", htmlURL: j["html_url"] as? String ?? "")
         }
+    }
+}
+
+struct AppRelease: Equatable, Sendable {
+    var version: String
+    var name: String
+    var url: URL
+}
+
+enum AppInfo {
+    /// Where Hangar's releases are published (a public repository).
+    static let repo = "rsutcliffe/Hangar"
+    static var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0" }
+
+    /// The release to offer: only when it is newer than the running version.
+    static func update(current: String, latest: AppRelease?) -> AppRelease? {
+        guard let latest, VersionCheck.isBehind(current: current, latest: latest.version) else { return nil }
+        return latest
     }
 }

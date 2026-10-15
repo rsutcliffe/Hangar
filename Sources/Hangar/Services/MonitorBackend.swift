@@ -7,6 +7,10 @@ struct BackendSnapshot: Sendable {
     /// Labels of hosts that could not be reached this poll.
     var unreachable: [String] = []
     var tokenExpiry: Date? = nil
+    /// The newest published Hangar release, when update checks are on.
+    var latestApp: AppRelease? = nil
+    /// A host failed in a way that points at the Local Network permission.
+    var needsLocalNetwork = false
     /// Latest actions/runner release (e.g. "2.338.0"), if known.
     var latestRunner: String? = nil
 }
@@ -29,6 +33,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
     private let hosts = HostService()
     private let lock = NSLock()
     private var located: [String: Place] = [:]          // runner name -> where it lives
+    private var permissionHint = false
     private var labels: [String: String] = [:]          // host target -> label from the last successful probe
 
     struct Place: Sendable { var host: HostSpec; var profile: String?; var dir: String }
@@ -52,6 +57,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         var machines: [Machine] = []
         var warnings: [String] = []
         var unreachable: [String] = []
+        self.lock.withLock { self.permissionHint = false }
         await withTaskGroup(of: ([Machine], String?, String?).self) { group in
             for h in config.hosts.map(HostSpec.init) {
                 group.addTask {
@@ -85,7 +91,14 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                     out = out.map { var m = $0; m.label = label; return m }
                     if reached, let t = h.target { self.lock.withLock { self.labels[t] = label } }
                     let down = reached ? nil : (h.target.flatMap { t in self.lock.withLock { self.labels[t] } } ?? h.target ?? "this Mac")
-                    return (out, reached ? nil : "\(h.target ?? "This Mac") unreachable" + (why.isEmpty ? "" : " (\(why))"), down)
+                    var warning: String?
+                    var perm = false
+                    if !reached {
+                        let p = LocalNetwork.explain(target: h.target ?? "This Mac", reason: why)
+                        warning = p.message; perm = p.needsLocalNetwork
+                    }
+                    if perm { self.lock.withLock { self.permissionHint = true } }
+                    return (out, warning, down)
                 }
             }
             for await (m, w, down) in group { machines += m; if let w { warnings.append(w) }; if let down { unreachable.append(down) } }
@@ -115,6 +128,8 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         snap.unreachable = unreachable.sorted()
         snap.tokenExpiry = await github.tokenExpiry()
         snap.latestRunner = await github.latestRunnerVersion()
+        snap.needsLocalNetwork = lock.withLock { permissionHint }
+        if config.checkUpdates { snap.latestApp = await github.latestAppRelease() }
         return snap
     }
 

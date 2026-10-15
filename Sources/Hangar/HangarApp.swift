@@ -9,7 +9,7 @@ struct HangarApp: App {
         let demo = args.contains("--demo")
         if args.contains("--light") { NSApplication.shared.appearance = NSAppearance(named: .aqua) }     // for checking Light mode
         if args.contains("--dark") { NSApplication.shared.appearance = NSAppearance(named: .darkAqua) }
-        let scenario: DemoBackend.Scenario = args.contains("--scenario-failed") ? .failed : args.contains("--scenario-unreachable") ? .unreachable : args.contains("--scenario-offline") ? .offline : .stalled
+        let scenario: DemoBackend.Scenario = args.contains("--scenario-failed") ? .failed : args.contains("--scenario-unreachable") ? .unreachable : args.contains("--scenario-offline") ? .offline : args.contains("--scenario-permission") ? .permission : .stalled
         let backend: MonitorBackend = demo ? DemoBackend(scenario: scenario) : LiveBackend()
         let s = MonitorStore(backend: backend)
         var action: ((MonitorStore) -> Void)?
@@ -17,6 +17,7 @@ struct HangarApp: App {
         if demo, args.contains("--scenario-paused") { action = { $0.toggleDrain("x86-01") } }
         if demo { s.recordHistory = false; s.loadDemoHistory() }
         s.start(demoAction: action)
+        if demo, args.contains("--welcome") { s.showWelcome = true }
         _store = State(initialValue: s)
     }
 

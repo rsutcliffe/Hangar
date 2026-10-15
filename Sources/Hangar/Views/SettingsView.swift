@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var loginItem = LoginItemModel()
     @State private var badgeAllowed = true
     @AppStorage(Config.Key.quietEnabled) private var quietEnabled = false
+    @AppStorage(Config.Key.checkUpdates) private var checkUpdates = true
     @AppStorage(Config.Key.quietStart) private var quietStart = 22
     @AppStorage(Config.Key.quietEnd) private var quietEnd = 7
     @State private var report: ConnectionReport?
@@ -45,6 +46,7 @@ struct SettingsView: View {
                         Button("Open Login Items") { loginItem.openSettings() }.controlSize(.small)
                     }
                 }
+                Toggle("Tell me when a new Hangar release is available", isOn: $checkUpdates)
                 if let e = loginItem.error { Text(e).font(.caption).foregroundStyle(.red) }
                 if !badgeAllowed {
                     Text("The Dock badge is off. Turn on “Badge app icon” for Hangar in System Settings ▸ Notifications.")

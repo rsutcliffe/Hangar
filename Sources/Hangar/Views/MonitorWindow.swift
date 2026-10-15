@@ -26,6 +26,13 @@ struct MonitorWindow: View {
                             }
                         }
                     }
+                    if store.showWelcome {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(Welcome.text).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                            Spacer()
+                            Button("Got it") { store.dismissWelcome() }.buttonStyle(.plain).font(.system(size: 11, weight: .semibold))
+                        }
+                    }
                     if store.notificationsOff {
                         Text("Notifications are off for Hangar: stalls and failures won't alert you. Enable them in System Settings ▸ Notifications.")
                             .font(.system(size: 11)).foregroundStyle(Theme.problemText).frame(maxWidth: .infinity, alignment: .leading)
@@ -34,7 +41,13 @@ struct MonitorWindow: View {
                         Text(t).font(.system(size: 11)).foregroundStyle(Theme.problemText).frame(maxWidth: .infinity, alignment: .leading)
                     }
                     if let e = store.errorMessage {
-                        Text(e).font(.system(size: 11)).foregroundStyle(Theme.problemText).frame(maxWidth: .infinity, alignment: .leading)
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(e).font(.system(size: 11)).foregroundStyle(Theme.problemText).frame(maxWidth: .infinity, alignment: .leading)
+                            if store.needsLocalNetwork {
+                                Button("Open Local Network settings") { NSWorkspace.shared.open(LocalNetwork.settingsURL) }
+                                    .buttonStyle(.plain).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text)
+                            }
+                        }
                     }
                     UpNextCard(queue: store.queue, now: ctx.date)
                     footer
@@ -63,6 +76,10 @@ struct MonitorWindow: View {
     /// The two places the window doesn't otherwise show (also ⌥⌘C and ⌘,). Kept out of the title bar band, which swallows clicks.
     private var footer: some View {
         HStack(spacing: 14) {
+            if let u = store.update {
+                Button { NSWorkspace.shared.open(u.url) } label: { Label("Hangar \(u.version) is available", systemImage: "arrow.down.circle") }
+                    .foregroundStyle(Theme.running).help("Open the release page to download it")
+            }
             Spacer()
             Button { openWindow(id: "capacity") } label: { Label("Capacity", systemImage: "chart.bar.xaxis") }
                 .help("Capacity history (⌥⌘C)")
@@ -84,7 +101,7 @@ struct MonitorWindow: View {
     private func headerBody(now: Date, stale: Bool) -> some View {
         HStack {
             Text("Hangar").font(.system(size: 13, weight: .semibold))
-            Text(Freshness.ageText(lastSuccess: store.lastSuccess, now: now))
+            Text(store.settingUp ? "setting up…" : Freshness.ageText(lastSuccess: store.lastSuccess, now: now))
                 .font(.system(size: 11)).foregroundStyle(stale ? Theme.problemText : Theme.muted)
             Spacer()
             let a = store.queue.count(for: .arm64), x = store.queue.count(for: .x86)

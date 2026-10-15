@@ -3,7 +3,7 @@ import Foundation
 /// Scripted data mirroring the prototype so the UI can be checked with no token or VMs.
 /// Enabled with the `--demo` launch argument.
 final class DemoBackend: MonitorBackend, @unchecked Sendable {
-    enum Scenario: String { case stalled, failed, unreachable, offline }
+    enum Scenario: String { case stalled, failed, unreachable, offline, permission }
     let scenario: Scenario
     private let lock = NSLock()
     private var restarted: [String: Date] = [:]
@@ -58,6 +58,12 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
         ]
         var snap = BackendSnapshot(runners: runners, queue: queue)
         snap.latestRunner = "2.338.0"
+        if scenario == .permission {
+            // A Mac Mini that macOS has not yet been allowed to reach, and a newer release to download.
+            let p = LocalNetwork.explain(target: "192.168.1.20", reason: "ssh: connect to host 192.168.1.20 port 22: No route to host")
+            snap.warnings = [p.message]; snap.needsLocalNetwork = p.needsLocalNetwork
+            snap.latestApp = AppRelease(version: "0.2.0", name: "Hangar 0.2.0", url: URL(string: "https://github.com/rsutcliffe/Hangar/releases")!)
+        }
         if scenario == .unreachable {
             snap.tokenExpiry = now.addingTimeInterval(9 * 86_400)
             if hostDown { snap.unreachable = ["mac-mini"]; snap.warnings = ["mac-mini unreachable (ssh: connect to host mac-mini port 22: Operation timed out)"] }

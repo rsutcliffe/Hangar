@@ -1000,3 +1000,93 @@ final class FailureLogTests: XCTestCase {
         XCTAssertEqual(entries.count, 1); XCTAssertEqual(entries.first?.stepName, "Checkout"); XCTAssertEqual(entries.first?.runner, "runner-a")
     }
 }
+
+final class LocalNetworkTests: XCTestCase {
+    func testWhichAddressesTheMacOSPermissionCovers() {
+        for h in ["192.168.4.100", "10.0.0.5", "172.16.0.1", "172.31.255.1", "169.254.1.1", "mac-mini.local", "nas.home.arpa", "box.LAN"] {
+            XCTAssertTrue(LocalNetwork.isLocalAddress(h), h)
+        }
+        for h in ["172.15.0.1", "172.32.0.1", "8.8.8.8", "build.example.com", "300.1.1.1", ""] {
+            XCTAssertFalse(LocalNetwork.isLocalAddress(h), h)
+        }
+    }
+    func testUserIsStrippedFromTheTarget() {
+        XCTAssertEqual(LocalNetwork.hostName(fromTarget: "me@mac-mini.local"), "mac-mini.local")
+        XCTAssertEqual(LocalNetwork.hostName(fromTarget: "192.168.4.100"), "192.168.4.100")
+    }
+    func testNoRouteToALocalHostPointsAtThePermission() {
+        let p = LocalNetwork.explain(target: "192.168.4.100", reason: "ssh: connect to host 192.168.4.100 port 22: No route to host")
+        XCTAssertTrue(p.needsLocalNetwork)
+        XCTAssertTrue(p.message.contains("Local Network")); XCTAssertTrue(p.message.contains("192.168.4.100"))
+    }
+    func testOtherFailuresKeepTheirRealText() {
+        let off = LocalNetwork.explain(target: "192.168.4.100", reason: "ssh: connect to host 192.168.4.100 port 22: Operation timed out")
+        XCTAssertFalse(off.needsLocalNetwork); XCTAssertTrue(off.message.contains("Operation timed out"))
+        let key = LocalNetwork.explain(target: "me@mac-mini.local", reason: "Permission denied (publickey)")
+        XCTAssertFalse(key.needsLocalNetwork); XCTAssertTrue(key.message.contains("Permission denied"))
+        let remote = LocalNetwork.explain(target: "build.example.com", reason: "No route to host")
+        XCTAssertFalse(remote.needsLocalNetwork, "a public host is not governed by the Local Network permission")
+        XCTAssertEqual(LocalNetwork.explain(target: "x", reason: "").message, "x unreachable")
+    }
+    func testSettingsLinkIsTheSystemPane() {
+        XCTAssertEqual(LocalNetwork.settingsURL.scheme, "x-apple.systempreferences")
+        XCTAssertTrue(LocalNetwork.settingsURL.absoluteString.contains("Privacy_LocalNetwork"))
+    }
+    func testPrimingReturnsPromptlyEvenWhenNothingAnswers() async {
+        let start = Date()
+        await LocalNetwork.prime(target: "192.0.2.1", timeout: 1)         // documentation address: never answers
+        XCTAssertLessThan(Date().timeIntervalSince(start), 3)
+    }
+}
+
+final class WelcomeTests: XCTestCase {
+    func testShownOnceThenNever() {
+        let d = UserDefaults(suiteName: "hangar-welcome-\(UUID().uuidString)")!
+        XCTAssertTrue(Welcome.shouldShow(d))
+        Welcome.dismiss(d)
+        XCTAssertFalse(Welcome.shouldShow(d))
+    }
+    func testTextNamesBothPermissions() {
+        XCTAssertTrue(Welcome.text.contains("Notifications")); XCTAssertTrue(Welcome.text.contains("Local Network"))
+    }
+}
+
+final class UpdateCheckTests: XCTestCase {
+    let page = "https://github.com/rsutcliffe/Hangar/releases/tag/v0.1.3"
+    func data(_ s: String) -> Data { Data(s.utf8) }
+
+    func testParsesALatestRelease() {
+        let r = GitHubService.parseAppRelease(data(#"{"tag_name":"v0.1.3","name":"Hangar 0.1.3: Test","html_url":"\#(page)","draft":false,"prerelease":false}"#))
+        XCTAssertEqual(r?.version, "0.1.3"); XCTAssertEqual(r?.url.absoluteString, page)
+    }
+    func testRejectsDraftsPrereleasesBadTagsAndForeignLinks() {
+        XCTAssertNil(GitHubService.parseAppRelease(data(#"{"tag_name":"v0.1.3","html_url":"\#(page)","draft":true}"#)))
+        XCTAssertNil(GitHubService.parseAppRelease(data(#"{"tag_name":"v0.1.3","html_url":"\#(page)","prerelease":true}"#)))
+        XCTAssertNil(GitHubService.parseAppRelease(data(#"{"tag_name":"nightly","html_url":"\#(page)"}"#)))
+        XCTAssertNil(GitHubService.parseAppRelease(data(#"{"tag_name":"v0.1.3","html_url":"https://evil.example/x"}"#)))
+        XCTAssertNil(GitHubService.parseAppRelease(data("not json")))
+    }
+    func testOnlyANewerReleaseIsOffered() {
+        let r = AppRelease(version: "0.1.3", name: "", url: URL(string: page)!)
+        XCTAssertEqual(AppInfo.update(current: "0.1.2", latest: r)?.version, "0.1.3")
+        XCTAssertNil(AppInfo.update(current: "0.1.3", latest: r))
+        XCTAssertNil(AppInfo.update(current: "0.2.0", latest: r))
+        XCTAssertNil(AppInfo.update(current: "0.1.2", latest: nil))
+        XCTAssertEqual(AppInfo.update(current: "0.1.9", latest: AppRelease(version: "0.1.10", name: "", url: URL(string: page)!))?.version, "0.1.10")
+    }
+    func testOnByDefaultAndSwitchedOffInSettings() {
+        let d = UserDefaults(suiteName: "hangar-upd-\(UUID().uuidString)")!
+        XCTAssertTrue(Config.load(d).checkUpdates)
+        d.set(false, forKey: Config.Key.checkUpdates)
+        XCTAssertFalse(Config.load(d).checkUpdates)
+    }
+    func testClientFetchesCachesAndSendsNoToken() async {
+        StubURLProtocol.replies = [:]; StubURLProtocol.seen = []
+        StubURLProtocol.replies["/repos/rsutcliffe/Hangar/releases/latest"] = .init(body: #"{"tag_name":"v0.1.3","html_url":"\#(page)"}"#)
+        let gh = GitHubService(session: StubURLProtocol.session())
+        let a = await gh.latestAppRelease(), b = await gh.latestAppRelease()
+        XCTAssertEqual(a?.version, "0.1.3"); XCTAssertEqual(b, a)
+        XCTAssertEqual(StubURLProtocol.seen.count, 1, "second call is served from the cache")
+        XCTAssertNil(StubURLProtocol.seen[0].value(forHTTPHeaderField: "Authorization"))
+    }
+}

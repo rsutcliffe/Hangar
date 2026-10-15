@@ -10,6 +10,10 @@ final class MonitorStore {
     private(set) var errorMessage: String?
     private(set) var notificationsOff = false
     private(set) var tokenWarning: String?
+    private(set) var needsLocalNetwork = false
+    private(set) var update: AppRelease?
+    private(set) var settingUp = false
+    var showWelcome = false
     private(set) var tokenExpiry: Date?
     private(set) var lastSuccess: Date?
     private(set) var consecutiveFailures = 0
@@ -58,11 +62,20 @@ final class MonitorStore {
             }
         }
         notifier.requestAuthorization { [weak self] in self?.notificationsOff = true }
+        showWelcome = demoAction == nil && recordHistory && Welcome.shouldShow()
         pollTask?.cancel()
         pollTask = Task { [weak self] in
+            guard let self else { return }
             var first = true
+            // Touch each SSH host once before the first poll, so macOS asks for Local Network access now.
+            if self.recordHistory {
+                self.settingUp = true
+                await withTaskGroup(of: Void.self) { g in
+                    for t in Config.load().hosts where t != "local" { g.addTask { await LocalNetwork.prime(target: t) } }
+                }
+                self.settingUp = false
+            }
             while !Task.isCancelled {
-                guard let self else { return }
                 await self.refresh()
                 if first { first = false; demoAction?(self) }
                 var secs = self.windowVisible ? max(5, Config.load().pollSeconds) : 60
@@ -80,6 +93,8 @@ final class MonitorStore {
                 let snap = try await backend.poll(config: config)
                 errorMessage = snap.warnings.isEmpty ? nil : snap.warnings.joined(separator: "; ")
                 tokenExpiry = snap.tokenExpiry
+            needsLocalNetwork = snap.needsLocalNetwork
+            update = config.checkUpdates ? AppInfo.update(current: AppInfo.version, latest: snap.latestApp) : nil
             latestRunner = snap.latestRunner
                 tokenWarning = TokenExpiry.warning(expiry: snap.tokenExpiry, now: Date())
                 apply(snap, config: config, now: Date())
@@ -188,6 +203,8 @@ final class MonitorStore {
     }
 
     func diagnose() async -> ConnectionReport { await backend.diagnose(config: Config.load()) }
+
+    func dismissWelcome() { showWelcome = false; Welcome.dismiss() }
 
     // MARK: actions
 
