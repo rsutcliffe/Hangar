@@ -72,7 +72,7 @@ struct Runner: Identifiable, Equatable, Sendable {
     /// Consecutive failures of the same job on this runner, when three or more.
     var failStreak: Int?
 
-    struct Note: Equatable { var text: String; var urgent: Bool }
+    struct Note: Equatable { var text: String; var urgent: Bool; var help: String? = nil }
 
     /// Extra lines for the card, most important first.
     var notes: [Note] {
@@ -80,7 +80,7 @@ struct Runner: Identifiable, Equatable, Sendable {
         if let d = DiskRule.warning(freeKB: diskFreeKB, usedPct: diskUsedPct) { n.append(Note(text: d, urgent: true)) }
         if let s = failStreak { n.append(Note(text: "Failed \(s) times in a row here", urgent: true)) }
         if let f = longRunFactor { n.append(Note(text: String(format: "Running %.1fx longer than usual", f), urgent: true)) }
-        if let v = version, let l = latestVersion, VersionCheck.isBehind(current: v, latest: l) { n.append(Note(text: "Update available: \(l)", urgent: false)) }
+        if let v = version, let l = latestVersion, VersionCheck.isBehind(current: v, latest: l) { n.append(Note(text: "Runner update available: \(l)", urgent: false, help: "GitHub Actions runner \(v) is installed; \(l) is the latest release")) }
         return n
     }
 

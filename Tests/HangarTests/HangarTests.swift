@@ -707,7 +707,7 @@ final class VersionCheckTests: XCTestCase {
     func testUpdateNoteIsMutedNotUrgent() {
         var r = Runner(id: "a", arch: .arm64, cpus: 1, memoryGB: 1, state: .idle)
         r.version = "2.337.0"; r.latestVersion = "2.338.0"
-        XCTAssertEqual(r.notes, [Runner.Note(text: "Update available: 2.338.0", urgent: false)])
+        XCTAssertEqual(r.notes, [Runner.Note(text: "Runner update available: 2.338.0", urgent: false, help: "GitHub Actions runner 2.337.0 is installed; 2.338.0 is the latest release")])
         r.version = "2.338.0"; XCTAssertTrue(r.notes.isEmpty)
     }
 }
@@ -996,7 +996,8 @@ final class FailureLogTests: XCTestCase {
         let snap = BackendSnapshot(runners: [obs], queue: [])
         let s = await MainActor.run { () -> MonitorStore in let s = MonitorStore(backend: FakeBackend([.success(snap), .success(snap), .success(snap)])); s.recordHistory = false; return s }
         for _ in 0..<3 { await s.refresh() }
-        let entries = await s.failures.entries
+        // The store also loads the real failures file from this Mac, so look only at this test's job.
+        let entries = await s.failures.entries.filter { $0.jobID == 55 }
         XCTAssertEqual(entries.count, 1); XCTAssertEqual(entries.first?.stepName, "Checkout"); XCTAssertEqual(entries.first?.runner, "runner-a")
     }
 }

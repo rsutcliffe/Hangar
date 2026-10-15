@@ -42,6 +42,7 @@ struct RunnerCard: View {
                 ForEach(Array(runner.notes.prefix(2).enumerated()), id: \.offset) { _, n in
                     Text(n.text).font(.system(size: 10, weight: n.urgent ? .semibold : .regular))
                         .foregroundStyle(n.urgent ? Theme.problemText : Theme.muted).lineLimit(1)
+                        .help(n.help ?? "")
                 }
             }
             .frame(minHeight: 34, alignment: .topLeading)
