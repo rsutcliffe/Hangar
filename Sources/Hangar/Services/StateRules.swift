@@ -48,7 +48,9 @@ enum StateRules {
                        now: Date, stallThreshold: TimeInterval, runnerCPUAvg: Double? = nil) -> RunnerState {
         if let since = intent.restartingSince {
             // Restarting lasts until the VM and runner report online again (after at least one poll).
-            if !(o.vmRunning && o.ghOnline && o.listenerRunning) || now.timeIntervalSince(since) < 1 { return .restarting }
+            // Wait for GitHub to show the runner online; give up after the timeout and let it read as offline.
+            if !RestartWatch.timedOut(since: since, now: now),
+               !(o.vmRunning && o.ghOnline && o.listenerRunning) || now.timeIntervalSince(since) < 1 { return .restarting }
         }
         if intent.paused { return .paused }
         if !o.vmRunning || !o.ghOnline || !o.listenerRunning { return .offline }

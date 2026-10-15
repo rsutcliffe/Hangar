@@ -58,6 +58,8 @@ struct Runner: Identifiable, Equatable, Sendable {
     var runnerCPU: Double?
     /// When the runner was last seen; set while its host is unreachable.
     var lastSeenAt: Date?
+    /// The last restart did not bring the runner back online within the timeout.
+    var restartFailed = false
 
     var spec: String {
         let hw = "\(cpus) CPU · \(Format.gb(memoryGB))"

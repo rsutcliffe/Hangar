@@ -58,7 +58,7 @@ final class LoginItemModel {
 enum ProblemBadge {
     /// Runners that need attention: stalled, failed, or in a confirmed unexpected outage.
     static func count(_ runners: [Runner], outages: Set<String> = []) -> Int {
-        runners.filter { $0.state.isProblem || ($0.state == .offline && outages.contains($0.id)) }.count
+        runners.filter { $0.state.isProblem || $0.restartFailed || ($0.state == .offline && outages.contains($0.id)) }.count
     }
 
     static func label(_ count: Int) -> String? { count > 0 ? String(count) : nil }

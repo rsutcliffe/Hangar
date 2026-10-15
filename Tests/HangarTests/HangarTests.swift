@@ -614,3 +614,53 @@ final class ConnectionReportTests: XCTestCase {
         for bad in ["ghp_", "github_pat_", "Bearer"] { XCTAssertFalse(all.contains(bad)) }
     }
 }
+
+final class RestartWatchTests: XCTestCase {
+    let now = Date(timeIntervalSince1970: 3_000_000)
+    func obs(online: Bool) -> RunnerObservation {
+        RunnerObservation(id: "a", arch: .arm64, cpus: 1, memoryGB: 1, vmRunning: true, ghOnline: online, busy: false,
+                          job: nil, cpuPercent: 0, memUsedGB: 0, lastJobEndedAt: nil)
+    }
+    func state(online: Bool, since: TimeInterval) -> RunnerState {
+        StateRules.derive(obs(online: online), intent: RunnerIntent(restartingSince: now - since), failureSeenAt: nil, now: now, stallThreshold: 600)
+    }
+    func testStaysRestartingUntilGitHubShowsItOnline() {
+        XCTAssertEqual(state(online: false, since: 30), .restarting)
+        XCTAssertEqual(state(online: false, since: 179), .restarting)
+        XCTAssertEqual(state(online: true, since: 30), .idle)
+    }
+    func testGivesUpAfterThreeMinutesAndReadsOffline() {
+        XCTAssertEqual(state(online: false, since: 180), .offline)
+        XCTAssertEqual(state(online: false, since: 600), .offline)
+    }
+    func testComingBackLateIsStillFine() { XCTAssertEqual(state(online: true, since: 400), .idle) }
+    func testTimeoutBoundary() {
+        XCTAssertFalse(RestartWatch.timedOut(since: now - 179.9, now: now))
+        XCTAssertTrue(RestartWatch.timedOut(since: now - 180, now: now))
+    }
+    func testFailedRestartCountsTowardTheBadge() {
+        var r = Runner(id: "a", arch: .arm64, cpus: 1, memoryGB: 1, state: .offline)
+        XCTAssertEqual(ProblemBadge.count([r]), 0)
+        r.restartFailed = true
+        XCTAssertEqual(ProblemBadge.count([r]), 1)
+    }
+}
+
+@MainActor
+final class HistoryFlushTests: XCTestCase {
+    func testFlushWritesTheLatestReadingsAndDemoDoesNot() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("hangar-flush-\(UUID().uuidString)")
+        let url = dir.appendingPathComponent("u.json")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let live = MonitorStore(backend: DemoBackend(scenario: .stalled))
+        live.recordHistory = true
+        live.flushHistory(to: url)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+
+        let demo = MonitorStore(backend: DemoBackend(scenario: .stalled))
+        demo.recordHistory = false
+        let other = dir.appendingPathComponent("none.json")
+        demo.flushHistory(to: other)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: other.path))
+    }
+}

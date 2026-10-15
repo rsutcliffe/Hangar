@@ -27,6 +27,14 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().setBadgeCount(count) { _ in }
     }
 
+    func notifyRestartFailed(runner: String, host: String) {
+        let c = UNMutableNotificationContent()
+        c.title = "Runner did not come back"
+        c.body = host.isEmpty ? "\(runner) is still offline after a restart." : "\(runner) on \(host) is still offline after a restart."
+        c.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "restart-\(runner)-\(Int(Date().timeIntervalSince1970))", content: c, trigger: nil))
+    }
+
     /// One alert per confirmed outage; the tracker guarantees it is only called once per outage.
     func notifyOffline(runner: String, host: String) {
         let text = NotificationText.offline(runner: runner, host: host)

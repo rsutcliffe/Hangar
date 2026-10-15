@@ -8,7 +8,7 @@ struct RunnerCard: View {
     var onDrain: () -> Void
 
     private var s: RunnerState { runner.state }
-    private var problem: Bool { s.isProblem }
+    private var problem: Bool { s.isProblem || runner.restartFailed }
     private var accent: Color { problem ? Theme.problem : Theme.running }
 
     var body: some View {
@@ -139,6 +139,7 @@ struct RunnerCard: View {
         guard let j = runner.job else {
             if let end = runner.lastJobEndedAt, s == .idle || s == .paused { return "Last ran \(Format.duration(now.timeIntervalSince(end))) ago" }
             if s == .unreachable { return runner.lastSeenAt.map { "Last seen \(Format.duration(now.timeIntervalSince($0))) ago" } ?? " " }
+            if runner.restartFailed { return "Did not come back after restart" }
             return s == .restarting ? "Back shortly" : " "
         }
         switch s {

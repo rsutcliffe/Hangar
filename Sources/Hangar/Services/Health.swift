@@ -37,3 +37,10 @@ enum RateLimit {
         return [.timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost, .dnsLookupFailed].contains(u.code)
     }
 }
+
+/// A restart is only done when GitHub shows the runner online again (issue 11).
+enum RestartWatch {
+    static let timeout: TimeInterval = 180
+
+    static func timedOut(since: Date, now: Date) -> Bool { now.timeIntervalSince(since) >= timeout }
+}

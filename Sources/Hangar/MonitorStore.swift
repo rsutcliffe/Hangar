@@ -29,6 +29,7 @@ final class MonitorStore {
     private var lastEnded: [String: Date] = [:]
     private var lastSeen: [String: Date] = [:]
     private var outageTracker = OutageTracker()
+    private var failedRestarts: Set<String> = []
     private(set) var utilisation = UtilisationLog.load()
     var recordHistory = true
     private var lastActive: [String: Date] = {
@@ -39,7 +40,18 @@ final class MonitorStore {
 
     init(backend: MonitorBackend) { self.backend = backend }
 
+    /// Write the capacity history now (also called when the app quits or loses focus). Does nothing in demo mode.
+    func flushHistory(to url: URL? = UtilisationLog.defaultURL()) {
+        guard recordHistory else { return }
+        utilisation.save(to: url)
+    }
+
     func start(demoAction: ((MonitorStore) -> Void)? = nil) {
+        for name in [NSApplication.willTerminateNotification, NSApplication.didResignActiveNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.flushHistory() }
+            }
+        }
         notifier.requestAuthorization { [weak self] in self?.notificationsOff = true }
         pollTask?.cancel()
         pollTask = Task { [weak self] in
@@ -94,7 +106,13 @@ final class MonitorStore {
             let cpuAvg = Self.average(runnerCPUHistory[o.id] ?? [], minimum: 2)
             var state = StateRules.derive(obs, intent: intent, failureSeenAt: seen, now: now, stallThreshold: config.stallThreshold,
                                           runnerCPUAvg: cpuAvg)
-            if intent.restartingSince != nil && state != .restarting { intent.restartingSince = nil }
+            if let since = intent.restartingSince, state != .restarting {
+                if state == .offline, RestartWatch.timedOut(since: since, now: now) {
+                    if failedRestarts.insert(o.id).inserted { notifier.notifyRestartFailed(runner: o.id, host: o.host) }
+                }
+                intent.restartingSince = nil
+            }
+            if state != .offline { failedRestarts.remove(o.id) }
 
             if intent.draining, !intent.paused, state == .idle {
                 intent.paused = true; state = .paused
@@ -115,7 +133,8 @@ final class MonitorStore {
             out.append(Runner(id: o.id, arch: o.arch, cpus: o.cpus, memoryGB: o.memoryGB, state: state,
                               draining: intent.draining, job: shown, cpuHistory: history[o.id] ?? [],
                               memUsedGB: o.memUsedGB, lastJobEndedAt: o.lastJobEndedAt ?? lastEnded[o.id],
-                              failedAt: seen, host: o.host, standby: o.standby, runnerCPU: cpuAvg))
+                              failedAt: seen, host: o.host, standby: o.standby, runnerCPU: cpuAvg,
+                              restartFailed: failedRestarts.contains(o.id)))
         }
         if recordHistory {
             let longest = queue.map { now.timeIntervalSince($0.queuedAt) }.max() ?? 0
@@ -149,6 +168,7 @@ final class MonitorStore {
         if let j = r.job { dismissedFailures.insert(j.id) }
         var i = intents[id] ?? RunnerIntent()
         i.restartingSince = Date(); i.paused = false; i.draining = false
+        failedRestarts.remove(id)
         intents[id] = i
         setState(id, .restarting)
         let config = Config.load()
