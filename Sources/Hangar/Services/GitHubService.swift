@@ -1,13 +1,14 @@
 import Foundation
 
 enum GitHubError: Error, Equatable, LocalizedError {
-    case noToken, unauthorized, rateLimited, http(Int), badURL
+    case noToken, unauthorized, rateLimited(until: Date?), http(Int), badURL
 
     var errorDescription: String? {
         switch self {
         case .noToken: "No GitHub token set"
         case .unauthorized: "GitHub rejected the token"
-        case .rateLimited: "GitHub rate limit reached"
+        case .rateLimited(let until):
+            until.map { "GitHub rate limit: next poll at \($0.formatted(date: .omitted, time: .shortened))" } ?? "GitHub rate limit reached"
         case .http(403): "Token lacks permission (needs Actions and Administration: read)"
         case .http(404): "Repo not found or token cannot see it"
         case .http(let c): "GitHub returned HTTP \(c)"
@@ -56,7 +57,12 @@ actor GitHubService {
         case 200..<300: return try JSONSerialization.jsonObject(with: data)
         case 401: throw GitHubError.unauthorized
         case 403, 429:
-            if (resp as? HTTPURLResponse)?.value(forHTTPHeaderField: "x-ratelimit-remaining") == "0" { throw GitHubError.rateLimited }
+            let h = resp as? HTTPURLResponse
+            let retry = h?.value(forHTTPHeaderField: "retry-after")
+            if h?.value(forHTTPHeaderField: "x-ratelimit-remaining") == "0" || retry != nil || code == 429 {
+                let wait = RateLimit.delay(retryAfter: retry, resetEpoch: h?.value(forHTTPHeaderField: "x-ratelimit-reset"), now: Date())
+                throw GitHubError.rateLimited(until: wait.map { Date().addingTimeInterval($0) })
+            }
             throw GitHubError.http(code)
         default: throw GitHubError.http(code)
         }

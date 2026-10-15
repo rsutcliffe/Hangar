@@ -11,6 +11,13 @@ final class MonitorStore {
     private(set) var notificationsOff = false
     private(set) var tokenWarning: String?
     private(set) var tokenExpiry: Date?
+    private(set) var lastSuccess: Date?
+    private(set) var consecutiveFailures = 0
+    private var backoffUntil: Date?
+
+    func isStale(now: Date = Date()) -> Bool {
+        Freshness.isStale(lastSuccess: lastSuccess, now: now, pollSeconds: Config.load().pollSeconds, consecutiveFailures: consecutiveFailures)
+    }
 
     private let backend: MonitorBackend
     private let notifier = NotificationService()
@@ -41,7 +48,8 @@ final class MonitorStore {
                 guard let self else { return }
                 await self.refresh()
                 if first { first = false; demoAction?(self) }
-                let secs = self.windowVisible ? max(5, Config.load().pollSeconds) : 60
+                var secs = self.windowVisible ? max(5, Config.load().pollSeconds) : 60
+                if let until = self.backoffUntil { secs = max(secs, Int(until.timeIntervalSinceNow.rounded(.up))) }
                 try? await Task.sleep(for: .seconds(secs))
             }
         }
@@ -49,14 +57,24 @@ final class MonitorStore {
 
     func refresh() async {
         let config = Config.load()
-        do {
-            let snap = try await backend.poll(config: config)
-            errorMessage = snap.warnings.isEmpty ? nil : snap.warnings.joined(separator: "; ")
-            tokenExpiry = snap.tokenExpiry
-            tokenWarning = TokenExpiry.warning(expiry: snap.tokenExpiry, now: Date())
-            apply(snap, config: config, now: Date())
-        } catch {
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? "Poll failed"
+        var attempt = 0
+        while true {
+            do {
+                let snap = try await backend.poll(config: config)
+                errorMessage = snap.warnings.isEmpty ? nil : snap.warnings.joined(separator: "; ")
+                tokenExpiry = snap.tokenExpiry
+                tokenWarning = TokenExpiry.warning(expiry: snap.tokenExpiry, now: Date())
+                apply(snap, config: config, now: Date())
+                lastSuccess = Date(); consecutiveFailures = 0; backoffUntil = nil
+                return
+            } catch {
+                // One quick retry for a brief network failure; anything else waits for the next poll.
+                if attempt == 0, RateLimit.isTransient(error) { attempt += 1; try? await Task.sleep(for: .seconds(2)); continue }
+                consecutiveFailures += 1
+                if case GitHubError.rateLimited(let until) = error { backoffUntil = until }
+                errorMessage = (error as? LocalizedError)?.errorDescription ?? "Poll failed"
+                return
+            }
         }
     }
 

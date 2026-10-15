@@ -3,6 +3,7 @@ import SwiftUI
 struct RunnerCard: View {
     let runner: Runner
     let now: Date
+    var dimmed = false
     var onRestart: () -> Void
     var onDrain: () -> Void
 
@@ -85,8 +86,9 @@ struct RunnerCard: View {
                     .padding(.top, 6).padding(.trailing, 10)
             }
         }
+        .opacity(dimmed ? 0.55 : 1)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(runner.accessibilitySummary(now: now))
+        .accessibilityLabel(runner.accessibilitySummary(now: now) + (dimmed ? ", data is out of date" : ""))
     }
 
     private var figure: String {

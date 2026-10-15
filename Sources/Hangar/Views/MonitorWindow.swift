@@ -8,13 +8,13 @@ struct MonitorWindow: View {
     var body: some View {
         // Scrolls only when the runners would not fit on screen; otherwise the window hugs its content.
         ScrollView(.vertical) {
-        TimelineView(.periodic(from: .now, by: 30)) { ctx in
+        TimelineView(.periodic(from: .now, by: 10)) { ctx in
             GlassEffectContainer(spacing: 10) {
                 VStack(spacing: 12) {
-                    header
+                    header(now: ctx.date)
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: 3), spacing: 10) {
                         ForEach(store.runners) { r in
-                            RunnerCard(runner: r, now: ctx.date,
+                            RunnerCard(runner: r, now: ctx.date, dimmed: store.isStale(now: ctx.date),
                                        onRestart: { store.restart(r.id) }, onDrain: { store.toggleDrain(r.id) })
                         }
                     }
@@ -54,9 +54,16 @@ struct MonitorWindow: View {
     /// Leave room for the title bar and Dock; beyond this the runner list scrolls.
     private var maxContentHeight: CGFloat { (NSScreen.main?.visibleFrame.height ?? 800) - 52 }
 
-    private var header: some View {
+    private func header(now: Date) -> some View {
+        let stale = store.isStale(now: now)
+        return headerBody(now: now, stale: stale)
+    }
+
+    private func headerBody(now: Date, stale: Bool) -> some View {
         HStack {
             Text("Hangar").font(.system(size: 13, weight: .semibold))
+            Text(Freshness.ageText(lastSuccess: store.lastSuccess, now: now))
+                .font(.system(size: 11)).foregroundStyle(stale ? Theme.problemText : Theme.muted)
             Spacer()
             let a = store.queue.count(for: .arm64), x = store.queue.count(for: .x86)
             let stuck = store.queue.stuckCount

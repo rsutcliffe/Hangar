@@ -545,3 +545,46 @@ final class UtilisationLogTests: XCTestCase {
         XCTAssertEqual(CapacityView.queueSummary([b]), "peak 5 queued · longest wait 10m")
     }
 }
+
+final class FreshnessTests: XCTestCase {
+    let now = Date(timeIntervalSince1970: 2_000_000)
+    func testStaleAfterThreeMissedPollsOrThreeIntervals() {
+        XCTAssertFalse(Freshness.isStale(lastSuccess: now - 20, now: now, pollSeconds: 15, consecutiveFailures: 0))
+        XCTAssertFalse(Freshness.isStale(lastSuccess: now - 44, now: now, pollSeconds: 15, consecutiveFailures: 2))
+        XCTAssertTrue(Freshness.isStale(lastSuccess: now - 46, now: now, pollSeconds: 15, consecutiveFailures: 0))
+        XCTAssertTrue(Freshness.isStale(lastSuccess: now - 5, now: now, pollSeconds: 15, consecutiveFailures: 3))
+        XCTAssertFalse(Freshness.isStale(lastSuccess: nil, now: now, pollSeconds: 15, consecutiveFailures: 0))
+        XCTAssertTrue(Freshness.isStale(lastSuccess: nil, now: now, pollSeconds: 15, consecutiveFailures: 3))
+    }
+    func testAgeText() {
+        XCTAssertEqual(Freshness.ageText(lastSuccess: nil, now: now), "waiting for first update")
+        XCTAssertEqual(Freshness.ageText(lastSuccess: now - 2, now: now), "updated just now")
+        XCTAssertEqual(Freshness.ageText(lastSuccess: now - 40, now: now), "updated 40s ago")
+        XCTAssertEqual(Freshness.ageText(lastSuccess: now - 125, now: now), "updated 2m ago")
+    }
+}
+
+final class RateLimitTests: XCTestCase {
+    let now = Date(timeIntervalSince1970: 2_000_000)
+    func testRetryAfterWinsAndResetEpochWorks() {
+        XCTAssertEqual(RateLimit.delay(retryAfter: "30", resetEpoch: "9999999999", now: now), 30)
+        XCTAssertEqual(RateLimit.delay(retryAfter: nil, resetEpoch: "\(Int(now.timeIntervalSince1970) + 120)", now: now), 120)
+        XCTAssertNil(RateLimit.delay(retryAfter: nil, resetEpoch: nil, now: now))
+        XCTAssertNil(RateLimit.delay(retryAfter: "soon", resetEpoch: nil, now: now))
+    }
+    func testDelayIsCappedAndNeverNegative() {
+        XCTAssertEqual(RateLimit.delay(retryAfter: "99999", resetEpoch: nil, now: now), 900)
+        XCTAssertEqual(RateLimit.delay(retryAfter: nil, resetEpoch: "\(Int(now.timeIntervalSince1970) - 50)", now: now), 1)
+    }
+    func testOnlyBriefNetworkErrorsAreRetried() {
+        XCTAssertTrue(RateLimit.isTransient(URLError(.timedOut)))
+        XCTAssertTrue(RateLimit.isTransient(URLError(.networkConnectionLost)))
+        XCTAssertFalse(RateLimit.isTransient(URLError(.badURL)))
+        XCTAssertFalse(RateLimit.isTransient(GitHubError.unauthorized))
+    }
+    func testMessageNamesTheTime() {
+        let msg = GitHubError.rateLimited(until: now).errorDescription!
+        XCTAssertTrue(msg.hasPrefix("GitHub rate limit: next poll at "))
+        XCTAssertEqual(GitHubError.rateLimited(until: nil).errorDescription, "GitHub rate limit reached")
+    }
+}
