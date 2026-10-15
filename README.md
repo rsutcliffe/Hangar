@@ -31,3 +31,13 @@ The GitHub token (fine-grained, `actions:read`) is stored in the macOS Keychain 
 ```bash
 xcodebuild -project Hangar.xcodeproj -scheme Hangar test CODE_SIGNING_ALLOWED=NO
 ```
+
+## Licence
+
+Hangar is open source under the [Apache License 2.0](LICENSE). You may use, modify and redistribute it, including commercially, provided that you:
+
+- keep the [LICENSE](LICENSE) and [NOTICE](NOTICE) files, so the original project and its author stay credited in your fork or product;
+- mark any files you changed;
+- do not use the Hangar name or icon to suggest your version is the original or endorsed by the author.
+
+The licence grants no rights to the Hangar name or icon beyond describing where your work came from.
