@@ -114,8 +114,8 @@ final class SnapshotParserTests: XCTestCase {
         ---
         1000
         H|colima
-        R|/home/u/actions-runner-gadgets|colima-web-ci|https://github.com/example-org/gadgets|1|940
-        R|/home/u/actions-runner|colima-api-ci|https://github.com/example-org/widgets|0|none
+        R|/home/u/actions-runner-gadgets|colima-app-ci|https://github.com/example-org/gadgets|1|940
+        R|/home/u/actions-runner|colima-db-ci|https://github.com/example-org/widgets|0|none
 
         """
         let prev = ProcParser.cpuTimes(fromStatLine: "cpu  100 0 100 700 100 0 0 0 0 0")
@@ -123,7 +123,7 @@ final class SnapshotParserTests: XCTestCase {
         XCTAssertEqual(snap.cpuPercent, 20, accuracy: 0.01)
         XCTAssertEqual(snap.memUsedGB, 5, accuracy: 0.001)
         XCTAssertEqual(snap.hostname, "colima")
-        XCTAssertEqual(snap.runners.map(\.name), ["colima-web-ci", "colima-api-ci"])
+        XCTAssertEqual(snap.runners.map(\.name), ["colima-app-ci", "colima-db-ci"])
         XCTAssertEqual(snap.runners[0].lastOutputAt!.timeIntervalSinceNow, -60, accuracy: 2)
         XCTAssertNil(snap.runners[1].lastOutputAt); XCTAssertFalse(snap.runners[1].listenerRunning)
         XCTAssertNil(SnapshotParser.ownerRepo(fromURL: "https://github.com/a;b/c"))
