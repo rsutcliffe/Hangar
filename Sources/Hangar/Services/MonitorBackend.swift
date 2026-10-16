@@ -218,7 +218,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         let started = j.startedAt ?? j.createdAt
         return ActiveJob(id: j.id, repo: j.repo, workflow: j.workflow, runNumber: j.runNumber, branch: j.branch,
                          totalSteps: j.steps.count, currentStep: min(current, max(j.steps.count, 1)),
-                         startedAt: started, lastOutputAt: lastOutput ?? started,
+                         startedAt: started, lastOutputAt: max(lastOutput ?? started, started),     // a log older than the job is the previous job's
                          failedStep: j.conclusion == "failure" ? (failedStep ?? current) : nil, exitCode: nil,
                          failedStepName: failed.flatMap { $0.name.isEmpty ? nil : $0.name }, url: GitHubLink.safe(j.htmlURL), jobName: j.name)
     }

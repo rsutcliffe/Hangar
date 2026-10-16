@@ -1108,4 +1108,14 @@ final class UpdateCheckTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.seen.count, 1, "second call is served from the cache")
         XCTAssertNil(StubURLProtocol.seen[0].value(forHTTPHeaderField: "Authorization"))
     }
+
+    func testOutputFromBeforeTheJobStartedDoesNotCountAsItsOutput() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let j = GHJob(id: 1, runId: 1, repo: "r", workflow: "W", runNumber: 1, branch: "main", status: "in_progress", conclusion: nil,
+                      labels: [], runnerName: "a", createdAt: start, startedAt: start, completedAt: nil, steps: [])
+        // The runner's newest log is the previous job's, written an hour before this one began.
+        XCTAssertEqual(LiveBackend.activeJob(j, lastOutput: start.addingTimeInterval(-3600)).lastOutputAt, start)
+        XCTAssertEqual(LiveBackend.activeJob(j, lastOutput: start.addingTimeInterval(90)).lastOutputAt, start.addingTimeInterval(90))
+        XCTAssertEqual(LiveBackend.activeJob(j, lastOutput: nil).lastOutputAt, start)
+    }
 }
