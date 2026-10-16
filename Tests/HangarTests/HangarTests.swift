@@ -728,6 +728,17 @@ final class VersionCheckTests: XCTestCase {
         XCTAssertEqual(r.notes, [Runner.Note(text: "Runner update available: 2.338.0", urgent: false, help: "GitHub Actions runner 2.337.0 is installed; 2.338.0 is the latest release")])
         r.version = "2.338.0"; XCTAssertTrue(r.notes.isEmpty)
     }
+    func testRunnerUpdateIsQuietForTwoWeeksThenOverdue() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        var r = Runner(id: "a", arch: .arm64, cpus: 1, memoryGB: 1, state: .idle)
+        r.version = "2.337.0"; r.latestVersion = "2.338.0"
+        r.latestPublished = now.addingTimeInterval(-10 * 86400)
+        XCTAssertTrue(r.notes(now: now).isEmpty)                                    // still within the time a runner takes to update itself
+        r.latestPublished = now.addingTimeInterval(-15 * 86400)
+        XCTAssertEqual(r.notes(now: now).map(\.text), ["Runner update overdue: 2.338.0"])
+        XCTAssertTrue(r.notes(now: now)[0].urgent)
+        r.version = "2.338.0"; XCTAssertTrue(r.notes(now: now).isEmpty)             // caught up
+    }
 }
 
 final class QuietHoursTests: XCTestCase {
@@ -863,10 +874,12 @@ final class GitHubClientTests: XCTestCase {
     }
 
     func testLatestRunnerVersionIsCachedAndSendsNoToken() async {
-        StubURLProtocol.replies["/repos/actions/runner/releases/latest"] = .init(body: #"{"tag_name":"v2.338.0"}"#)
+        StubURLProtocol.replies["/repos/actions/runner/releases/latest"] = .init(body: #"{"tag_name":"v2.338.0","published_at":"2026-10-06T13:55:11Z"}"#)
         let gh = GitHubService(session: StubURLProtocol.session())
         let a = await gh.latestRunnerVersion(), b = await gh.latestRunnerVersion()
         XCTAssertEqual(a, "2.338.0"); XCTAssertEqual(b, "2.338.0")
+        let rel = await gh.latestRunnerRelease()
+        XCTAssertEqual(rel?.published, ISO8601DateFormatter().date(from: "2026-10-06T13:55:11Z"))
         XCTAssertEqual(StubURLProtocol.seen.count, 1)                       // second call served from the cache
         XCTAssertNil(StubURLProtocol.seen[0].value(forHTTPHeaderField: "Authorization"))
     }

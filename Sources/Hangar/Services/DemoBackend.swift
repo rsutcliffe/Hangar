@@ -57,7 +57,7 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
             q(5, "web", "Lint", "main", 1192, .arm64, 20),
         ]
         var snap = BackendSnapshot(runners: runners, queue: queue)
-        snap.latestRunner = "2.338.0"
+        snap.latestRunner = "2.338.0"; snap.latestRunnerPublished = Date().addingTimeInterval(-20 * 86400)
         if scenario == .permission {
             // A Mac Mini that macOS has not yet been allowed to reach, and a newer release to download.
             let p = LocalNetwork.explain(target: "192.168.1.20", reason: "ssh: connect to host 192.168.1.20 port 22: No route to host")

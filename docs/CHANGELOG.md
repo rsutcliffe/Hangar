@@ -2,6 +2,11 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.5 - 2026-10-16
+
+- A job that has just started is no longer wrongly shown as stalled. Hangar used to count the previous job's log as the new job's output, so a brief job could appear silent for an hour.
+- A runner that is behind on its version now stays quiet for the first two weeks after a new release, because runners normally update themselves in that time. After that it shows "Runner update overdue" in red, since GitHub stops giving a runner jobs about a month after a release if it has not updated.
+
 ## 0.1.4 - 2026-10-15
 
 - The note on a runner that is behind now reads "Runner update available", and hovering it shows the installed and latest runner versions, so it is not mistaken for an update to Colima.

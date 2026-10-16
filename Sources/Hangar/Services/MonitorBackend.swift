@@ -13,6 +13,7 @@ struct BackendSnapshot: Sendable {
     var needsLocalNetwork = false
     /// Latest actions/runner release (e.g. "2.338.0"), if known.
     var latestRunner: String? = nil
+    var latestRunnerPublished: Date? = nil
 }
 
 /// Source of raw facts and the place side effects happen. Live = GitHub + Colima, Demo = scripted.
@@ -127,7 +128,8 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         snap.warnings = warnings.sorted()
         snap.unreachable = unreachable.sorted()
         snap.tokenExpiry = await github.tokenExpiry()
-        snap.latestRunner = await github.latestRunnerVersion()
+        let rel = await github.latestRunnerRelease()
+        snap.latestRunner = rel?.version; snap.latestRunnerPublished = rel?.published
         snap.needsLocalNetwork = lock.withLock { permissionHint }
         if config.checkUpdates { snap.latestApp = await github.latestAppRelease() }
         return snap

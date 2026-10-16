@@ -68,7 +68,7 @@ actor GitHubService {
         }
     }
 
-    private var latestRunner: (version: String, fetched: Date)?
+    private var latestRunner: (version: String, published: Date?, fetched: Date)?
     private var latestApp: (release: AppRelease, fetched: Date)?
 
     /// Latest published Hangar release, from the public endpoint with no token, cached for six hours.
@@ -91,19 +91,23 @@ actor GitHubService {
         return AppRelease(version: tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV")), name: j["name"] as? String ?? "", url: page)
     }
 
-    /// Latest actions/runner release tag, from a public endpoint, cached for six hours. nil if it cannot be read.
-    func latestRunnerVersion(now: Date = Date()) async -> String? {
-        if let c = latestRunner, now.timeIntervalSince(c.fetched) < 6 * 3600 { return c.version }
-        guard let url = URL(string: "https://api.github.com/repos/actions/runner/releases/latest") else { return latestRunner?.version }
+    /// Latest actions/runner release, from a public endpoint, cached for six hours. nil if it cannot be read.
+    func latestRunnerRelease(now: Date = Date()) async -> (version: String, published: Date?)? {
+        if let c = latestRunner, now.timeIntervalSince(c.fetched) < 6 * 3600 { return (c.version, c.published) }
+        let old = latestRunner.map { ($0.version, $0.published) }
+        guard let url = URL(string: "https://api.github.com/repos/actions/runner/releases/latest") else { return old }
         var req = URLRequest(url: url, timeoutInterval: 10)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")        // no token: it is a public repo
         guard let (data, resp) = try? await session.data(for: req), (resp as? HTTPURLResponse)?.statusCode == 200,
-              let tag = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["tag_name"] as? String,
-              VersionCheck.parse(tag) != nil else { return latestRunner?.version }
+              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let tag = j["tag_name"] as? String,
+              VersionCheck.parse(tag) != nil else { return old }
         let v = tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
-        latestRunner = (v, now)
-        return v
+        let published = Self.date(j["published_at"])
+        latestRunner = (v, published, now)
+        return (v, published)
     }
+
+    func latestRunnerVersion(now: Date = Date()) async -> String? { await latestRunnerRelease(now: now)?.version }
 
     /// Repo-level runners (needs Administration: read on the repo).
     func runners(owner: String, repo: String, token: String) async throws -> [GHRunner] {

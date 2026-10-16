@@ -69,6 +69,8 @@ struct Runner: Identifiable, Equatable, Sendable {
     var diskIsVM = false
     var version: String?
     var latestVersion: String?
+    /// When that release came out; a runner that has not caught up with an old release is not updating itself.
+    var latestPublished: Date?
     /// Times longer than this job usually takes, when notably long.
     var longRunFactor: Double?
     /// Consecutive failures of the same job on this runner, when three or more.
@@ -77,12 +79,21 @@ struct Runner: Identifiable, Equatable, Sendable {
     struct Note: Equatable { var text: String; var urgent: Bool; var help: String? = nil }
 
     /// Extra lines for the card, most important first.
-    var notes: [Note] {
+    var notes: [Note] { notes(now: Date()) }
+
+    func notes(now: Date) -> [Note] {
         var n: [Note] = []
         if let d = DiskRule.warning(freeKB: diskFreeKB, usedPct: diskUsedPct, vm: diskIsVM) { n.append(Note(text: d, urgent: true)) }
         if let s = failStreak { n.append(Note(text: "Failed \(s) times in a row here", urgent: true)) }
         if let f = longRunFactor { n.append(Note(text: String(format: "Running %.1fx longer than usual", f), urgent: true)) }
-        if let v = version, let l = latestVersion, VersionCheck.isBehind(current: v, latest: l) { n.append(Note(text: "Runner update available: \(l)", urgent: false, help: "GitHub Actions runner \(v) is installed; \(l) is the latest release")) }
+        if let v = version, let l = latestVersion, VersionCheck.isBehind(current: v, latest: l) {
+            let help = "GitHub Actions runner \(v) is installed; \(l) is the latest release"
+            switch latestPublished.map({ now.timeIntervalSince($0) }) {
+            case let age? where age < RunnerUpdate.grace: break                // runners normally update themselves within days
+            case .some: n.append(Note(text: "Runner update overdue: \(l)", urgent: true, help: help + ". It has not updated itself, and GitHub stops giving a runner jobs about 30 days after a release."))
+            case nil: n.append(Note(text: "Runner update available: \(l)", urgent: false, help: help))
+            }
+        }
         return n
     }
 

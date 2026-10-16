@@ -175,7 +175,7 @@ final class MonitorStore {
                               memUsedGB: o.memUsedGB, lastJobEndedAt: o.lastJobEndedAt ?? lastEnded[o.id],
                               failedAt: seen, host: o.host, standby: o.standby, runnerCPU: cpuAvg,
                               restartFailed: failedRestarts.contains(o.id), diskFreeKB: showDisk ? o.diskFreeKB : nil, diskUsedPct: showDisk ? o.diskUsedPct : nil, diskIsVM: !o.native,
-                              version: o.version, latestVersion: snap.latestRunner, longRunFactor: longRun, failStreak: streak))
+                              version: o.version, latestVersion: snap.latestRunner, latestPublished: snap.latestRunnerPublished, longRunFactor: longRun, failStreak: streak))
         }
         if recordHistory {
             let longest = queue.map { now.timeIntervalSince($0.queuedAt) }.max() ?? 0

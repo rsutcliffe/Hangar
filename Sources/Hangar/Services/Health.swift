@@ -152,3 +152,8 @@ extension JobHistory {
         if let d = try? JSONEncoder().encode(self) { try? d.write(to: url, options: .atomic) }
     }
 }
+
+enum RunnerUpdate {
+    /// How long a new runner release is left to install itself before Hangar calls the runner overdue.
+    static let grace: TimeInterval = 14 * 86400
+}
