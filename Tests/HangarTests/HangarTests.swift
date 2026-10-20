@@ -1131,4 +1131,10 @@ final class UpdateCheckTests: XCTestCase {
         XCTAssertEqual(LiveBackend.activeJob(j, lastOutput: start.addingTimeInterval(90)).lastOutputAt, start.addingTimeInterval(90))
         XCTAssertEqual(LiveBackend.activeJob(j, lastOutput: nil).lastOutputAt, start)
     }
+
+    func testFailureTimeShowsTheDateAndTime() {
+        let d = Date(timeIntervalSince1970: 1_792_470_000)            // 2026-10-20 04:20 UTC
+        let utc = TimeZone(identifier: "UTC")!, gb = Locale(identifier: "en_GB")
+        XCTAssertEqual(Format.shortDateTime(d, locale: gb, timeZone: utc), "20 Oct at 04:20")
+    }
 }

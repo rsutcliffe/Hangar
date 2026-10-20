@@ -59,7 +59,8 @@ struct CapacityView: View {
                 ForEach(recent) { f in
                     JobLink(url: f.url.flatMap(GitHubLink.safe)) {
                         HStack(spacing: 8) {
-                            Text(Format.duration(Date().timeIntervalSince(f.at)) + " ago").frame(width: 52, alignment: .leading).foregroundStyle(Theme.muted)
+                            Text(Format.shortDateTime(f.at)).frame(width: 110, alignment: .leading).foregroundStyle(Theme.muted)
+                                .help(Format.duration(Date().timeIntervalSince(f.at)) + " ago")
                             Text(f.runner).fontWeight(.semibold).frame(width: 110, alignment: .leading)
                             Text("\(f.title) · \(f.reason)").foregroundStyle(Theme.problemText).lineLimit(1).truncationMode(.tail)
                             Spacer(minLength: 0)
