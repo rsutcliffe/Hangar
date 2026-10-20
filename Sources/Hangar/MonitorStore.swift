@@ -115,11 +115,16 @@ final class MonitorStore {
         queue = snap.queue.sorted { $0.queuedAt < $1.queuedAt }
         var out: [Runner] = []
         // Runners in one Colima VM share its root disk, so they report identical figures: say it once, on the first.
-        var disksShown = Set<String>()
+        // The same pick every poll (probe order is not stable), so a note does not jump between cards.
+        var diskOwner: [String: String] = [:], memoryOwner: [String: String] = [:]
+        for o in snap.runners.sorted(by: { $0.id < $1.id }) {
+            if o.diskFreeKB != nil { diskOwner[Self.diskKey(o)] = diskOwner[Self.diskKey(o)] ?? o.id }
+            if o.hostMemory != nil { memoryOwner[o.host] = memoryOwner[o.host] ?? o.id }
+        }
         for o in snap.runners {
             var obs = o
-            let diskKey = "\(o.host)|\(o.native)|\(o.diskFreeKB ?? -1)|\(o.diskUsedPct ?? -1)"
-            let showDisk = o.diskFreeKB == nil || disksShown.insert(diskKey).inserted
+            let showDisk = o.diskFreeKB == nil || diskOwner[Self.diskKey(o)] == o.id
+            let showMemory = o.hostMemory != nil && memoryOwner[o.host] == o.id
             var h = history[o.id, default: []]; h.append(o.cpuPercent); history[o.id] = Array(h.suffix(10))
             var intent = intents[o.id] ?? RunnerIntent()
 
@@ -160,7 +165,7 @@ final class MonitorStore {
             }
             let longRun = (state == .running || state == .stalled) ? shown.flatMap { jobHistory.longRunFactor(jobKey: $0.historyKey, elapsed: now.timeIntervalSince($0.startedAt)) } : nil
             let streak = jobHistory.streak(runner: o.id)
-            notices(o, showDisk: showDisk, longRun: longRun, streak: streak, job: shown, config: config, now: now)
+            notices(o, showDisk: showDisk, showMemory: showMemory, longRun: longRun, streak: streak, job: shown, config: config, now: now)
             if let p = runners.first(where: { $0.id == o.id }), p.job != nil, shown == nil, state != .restarting { lastEnded[o.id] = now }
             if let j = shown {
                 let silent = Int(now.timeIntervalSince(j.lastOutputAt) / 60)
@@ -174,7 +179,7 @@ final class MonitorStore {
                               draining: intent.draining, job: shown, cpuHistory: history[o.id] ?? [],
                               memUsedGB: o.memUsedGB, lastJobEndedAt: o.lastJobEndedAt ?? lastEnded[o.id],
                               failedAt: seen, host: o.host, standby: o.standby, runnerCPU: cpuAvg,
-                              restartFailed: failedRestarts.contains(o.id), diskFreeKB: showDisk ? o.diskFreeKB : nil, diskUsedPct: showDisk ? o.diskUsedPct : nil, diskIsVM: !o.native,
+                              restartFailed: failedRestarts.contains(o.id), diskFreeKB: showDisk ? o.diskFreeKB : nil, diskUsedPct: showDisk ? o.diskUsedPct : nil, diskIsVM: !o.native, hostMemory: showMemory ? o.hostMemory : nil,
                               version: o.version, latestVersion: snap.latestRunner, latestPublished: snap.latestRunnerPublished, longRunFactor: longRun, failStreak: streak))
         }
         if recordHistory {
@@ -193,6 +198,8 @@ final class MonitorStore {
         notifier.setBadge(problems)
         UserDefaults.standard.set(lastActive.mapValues(\.timeIntervalSince1970), forKey: "lastActive")
     }
+
+    nonisolated static func diskKey(_ o: RunnerObservation) -> String { "\(o.host)|\(o.native)|\(o.diskFreeKB ?? -1)|\(o.diskUsedPct ?? -1)" }
 
     nonisolated static func average(_ xs: [Double], minimum: Int) -> Double? {
         xs.count >= minimum ? xs.reduce(0, +) / Double(xs.count) : nil
@@ -245,7 +252,7 @@ final class MonitorStore {
     }
 
     /// Non-urgent notices go out once, and wait while quiet hours are on. They are shown as notes on the card regardless.
-    private func notices(_ o: RunnerObservation, showDisk: Bool, longRun: Double?, streak: Int?, job: ActiveJob?, config: Config, now: Date) {
+    private func notices(_ o: RunnerObservation, showDisk: Bool, showMemory: Bool, longRun: Double?, streak: Int?, job: ActiveJob?, config: Config, now: Date) {
         let quiet = QuietHours.isQuiet(now, config: config)
         func once(_ key: String, active: Bool, title: String, body: String) {
             let k = "\(o.id)|\(key)"
@@ -255,6 +262,8 @@ final class MonitorStore {
         }
         let disk = showDisk ? DiskRule.warning(freeKB: o.diskFreeKB, usedPct: o.diskUsedPct, vm: !o.native) : nil
         once("disk", active: disk != nil, title: o.native ? "Runner disk low" : "VM disk low", body: "\(o.id)\(o.host.isEmpty ? "" : " on \(o.host)"): \(disk ?? "")")
+        let mem = showMemory ? MemoryRule.warning(o.hostMemory) : nil
+        once("memory", active: mem != nil, title: "Mac low on memory", body: "\(o.host.isEmpty ? "This Mac" : o.host): \(mem?.text ?? ""). Jobs in its VMs will run slowly.")
         once("streak", active: streak != nil, title: "Same job keeps failing", body: "\(o.id) has failed the same job \(streak ?? 0) times in a row.")
         once("long", active: longRun != nil, title: "Job running long", body: "\(o.id): a job is taking \(String(format: "%.1f", longRun ?? 0))x longer than usual.")
     }

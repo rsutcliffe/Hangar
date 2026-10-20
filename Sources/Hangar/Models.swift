@@ -67,6 +67,8 @@ struct Runner: Identifiable, Equatable, Sendable {
     var diskUsedPct: Int?
     /// The figures are for a Colima VM's disk, which its runners share (not a Mac's own disk).
     var diskIsVM = false
+    /// The Mac's memory state; set on one runner per host, like the disk figures.
+    var hostMemory: HostMemory?
     var version: String?
     var latestVersion: String?
     /// When that release came out; a runner that has not caught up with an old release is not updating itself.
@@ -84,6 +86,7 @@ struct Runner: Identifiable, Equatable, Sendable {
     func notes(now: Date) -> [Note] {
         var n: [Note] = []
         if let d = DiskRule.warning(freeKB: diskFreeKB, usedPct: diskUsedPct, vm: diskIsVM) { n.append(Note(text: d, urgent: true)) }
+        if let w = MemoryRule.warning(hostMemory) { n.append(Note(text: w.text, urgent: true, help: w.help)) }
         if let s = failStreak { n.append(Note(text: "Failed \(s) times in a row here", urgent: true)) }
         if let f = longRunFactor { n.append(Note(text: String(format: "Running %.1fx longer than usual", f), urgent: true)) }
         if let v = version, let l = latestVersion, VersionCheck.isBehind(current: v, latest: l) {

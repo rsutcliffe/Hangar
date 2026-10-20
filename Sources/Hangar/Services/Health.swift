@@ -157,3 +157,44 @@ enum RunnerUpdate {
     /// How long a new runner release is left to install itself before Hangar calls the runner overdue.
     static let grace: TimeInterval = 14 * 86400
 }
+
+/// A Mac's own memory state. A Linux VM cannot see it: when macOS is short of memory it pushes the VM's pages out to disk,
+/// and everything in the VM slows down with no error and nothing in the VM's own logs.
+struct HostMemory: Equatable, Sendable {
+    /// kern.memorystatus_vm_pressure_level: 1 normal, 2 warning, 4 critical.
+    var pressureLevel: Int
+    var swapUsedMB: Double
+    var swapTotalMB: Double
+    var ramGB: Double
+
+    /// `sysctl -n` output of the pressure level, vm.swapusage and hw.memsize, one per line.
+    static func parse(_ out: String) -> HostMemory? {
+        let lines = out.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard lines.count >= 3, let level = Int(lines[0]), let bytes = Double(lines[2]) else { return nil }
+        func mb(_ key: String) -> Double? {
+            guard let r = lines[1].range(of: "\(key) = ") else { return nil }
+            let rest = lines[1][r.upperBound...].prefix { !$0.isWhitespace }
+            guard let unit = rest.last, let n = Double(rest.dropLast()) else { return nil }
+            return unit == "G" ? n * 1024 : unit == "K" ? n / 1024 : n
+        }
+        guard let used = mb("used"), let total = mb("total") else { return nil }
+        return HostMemory(pressureLevel: level, swapUsedMB: used, swapTotalMB: total, ramGB: bytes / 1_073_741_824)
+    }
+}
+
+enum MemoryRule {
+    static let swapFullPct = 75
+    static let swapMinUsedMB = 2048.0
+
+    /// A card line and its tooltip, when the Mac is short of memory: the system says so, or most of its swap is in use.
+    static func warning(_ m: HostMemory?) -> (text: String, help: String)? {
+        guard let m else { return nil }
+        let used = String(format: "%.1f of %.1f GB swap in use", m.swapUsedMB / 1024, m.swapTotalMB / 1024)
+        let why = "A Linux VM on this Mac slows down when macOS is short of memory, with no error inside the VM. \(used)."
+        if m.pressureLevel >= 4 { return ("Mac memory pressure: critical", why) }
+        if m.pressureLevel >= 2 { return ("Mac memory pressure: high", why) }
+        let pct = m.swapTotalMB > 0 ? Int((m.swapUsedMB / m.swapTotalMB * 100).rounded()) : 0
+        if pct >= swapFullPct, m.swapUsedMB >= swapMinUsedMB { return ("Mac swap \(pct)% full", why) }
+        return nil
+    }
+}

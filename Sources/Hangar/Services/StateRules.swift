@@ -24,6 +24,7 @@ struct RunnerObservation: Equatable, Sendable {
     var diskFreeKB: Int? = nil
     var diskUsedPct: Int? = nil
     var version: String? = nil
+    var hostMemory: HostMemory? = nil
 }
 
 /// What the user has asked for, plus what the app has already acted on.

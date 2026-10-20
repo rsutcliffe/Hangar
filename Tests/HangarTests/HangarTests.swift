@@ -1137,4 +1137,35 @@ final class UpdateCheckTests: XCTestCase {
         let utc = TimeZone(identifier: "UTC")!, gb = Locale(identifier: "en_GB")
         XCTAssertEqual(Format.shortDateTime(d, locale: gb, timeZone: utc), "20 Oct at 04:20")
     }
+
+    func testHostMemoryParsesSysctlOutput() {
+        let m = HostMemory.parse("1\nvm.swapusage: total = 5120.00M  used = 4172.31M  free = 947.69M  (encrypted)\n17179869184\n")!
+        XCTAssertEqual(m.pressureLevel, 1); XCTAssertEqual(m.swapTotalMB, 5120, accuracy: 0.01)
+        XCTAssertEqual(m.swapUsedMB, 4172.31, accuracy: 0.01); XCTAssertEqual(m.ramGB, 16, accuracy: 0.001)
+        XCTAssertEqual(HostMemory.parse("1\ntotal = 2.00G  used = 1.00G  free = 1.00G\n8589934592")?.swapTotalMB, 2048)
+        XCTAssertNil(HostMemory.parse("")); XCTAssertNil(HostMemory.parse("x\ny\nz"))
+    }
+    func testMemoryRuleWarnsOnPressureOrMostlyFullSwap() {
+        func m(_ level: Int, _ used: Double, _ total: Double) -> HostMemory { HostMemory(pressureLevel: level, swapUsedMB: used, swapTotalMB: total, ramGB: 16) }
+        XCTAssertNil(MemoryRule.warning(nil))
+        XCTAssertNil(MemoryRule.warning(m(1, 500, 5120)))                          // swap barely used
+        XCTAssertNil(MemoryRule.warning(m(1, 1500, 2000)))                         // mostly full but small: nothing to worry about
+        XCTAssertEqual(MemoryRule.warning(m(1, 4172, 5120))?.text, "Mac swap 81% full")
+        XCTAssertEqual(MemoryRule.warning(m(2, 0, 0))?.text, "Mac memory pressure: high")
+        XCTAssertEqual(MemoryRule.warning(m(4, 0, 0))?.text, "Mac memory pressure: critical")
+    }
+    func testMemoryNoteShowsOnOneRunnerPerHostWhateverTheProbeOrder() async {
+        func obs(_ id: String) -> RunnerObservation {
+            RunnerObservation(id: id, arch: .arm64, cpus: 2, memoryGB: 4, vmRunning: true, ghOnline: true, busy: false, host: "box",
+                              job: nil, cpuPercent: 1, memUsedGB: 1, lastJobEndedAt: nil,
+                              hostMemory: HostMemory(pressureLevel: 2, swapUsedMB: 4000, swapTotalMB: 5000, ramGB: 16))
+        }
+        for order in [["b", "a", "c"], ["c", "a", "b"]] {
+            let snap = BackendSnapshot(runners: order.map(obs), queue: [])
+            let s = await MainActor.run { () -> MonitorStore in let s = MonitorStore(backend: FakeBackend([.success(snap)])); s.recordHistory = false; return s }
+            await s.refresh()
+            let withNote = await s.runners.filter { !$0.notes.filter { $0.text.hasPrefix("Mac memory") }.isEmpty }.map(\.id)
+            XCTAssertEqual(withNote, ["a"])
+        }
+    }
 }

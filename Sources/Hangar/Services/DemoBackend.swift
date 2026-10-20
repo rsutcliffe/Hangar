@@ -32,7 +32,8 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
                                      lastJobEndedAt: ended.map { now.addingTimeInterval(-$0) },
                                      runnerCPU: cpu, cpuSupported: true,
                                      diskFreeKB: id == "x86-01" ? 6_500_000 : 60_000_000, diskUsedPct: id == "x86-01" ? 84 : 40,
-                                     version: id == "arm-01" ? "2.337.0" : "2.338.0")
+                                     version: id == "arm-01" ? "2.337.0" : "2.338.0",
+                                     hostMemory: id == "arm-02" ? HostMemory(pressureLevel: 1, swapUsedMB: 4172, swapTotalMB: 5120, ramGB: 16) : nil)
         }
         let wob = Double(Int(now.timeIntervalSince(t0)) % 7)
         // In the unreachable scenario the second host drops out after 10 seconds, as if its SSH connection failed.

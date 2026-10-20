@@ -47,6 +47,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         var native: Bool
         var host: HostSpec
         var profile: String?
+        var hostMemory: HostMemory? = nil
     }
 
     func poll(config: Config) async throws -> BackendSnapshot {
@@ -89,7 +90,8 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                         out.append(Machine(label: "", info: nil, snap: snap, native: true, host: h, profile: nil))
                     }
                     let label = h.isLocal ? "this Mac" : SnapshotParser.shortName(hostname.isEmpty ? (h.target ?? "") : hostname)
-                    out = out.map { var m = $0; m.label = label; return m }
+                    let memory = reached ? await hosts.hostMemory(h) : nil
+                    out = out.map { var m = $0; m.label = label; m.hostMemory = memory; return m }
                     if reached, let t = h.target { self.lock.withLock { self.labels[t] = label } }
                     let down = reached ? nil : (h.target.flatMap { t in self.lock.withLock { self.labels[t] } } ?? h.target ?? "this Mac")
                     var warning: String?
@@ -206,7 +208,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                                              host: m.label, native: m.native, standby: gh?.isStandby ?? false,
                                              job: job, cpuPercent: m.snap.cpuPercent, memUsedGB: m.snap.memUsedGB, lastJobEndedAt: nil,
                                              runnerCPU: f.runnerCPU, cpuSupported: f.cpuSeconds != nil,
-                                             diskFreeKB: f.diskFreeKB, diskUsedPct: f.diskUsedPct, version: f.version))
+                                             diskFreeKB: f.diskFreeKB, diskUsedPct: f.diskUsedPct, version: f.version, hostMemory: m.hostMemory))
             }
         }
         return BackendSnapshot(runners: obs, queue: queue(from: jobs, runners: runners))

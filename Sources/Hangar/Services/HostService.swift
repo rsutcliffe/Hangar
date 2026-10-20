@@ -205,6 +205,14 @@ actor HostService {
         return withRunnerCPU(snap, key: key)
     }
 
+    /// The Mac's own memory state; nil on a host that is not macOS or cannot be read.
+    func hostMemory(_ host: HostSpec) async -> HostMemory? {
+        let cmd = "sysctl -n kern.memorystatus_vm_pressure_level vm.swapusage hw.memsize"
+        let out: String?
+        if let t = host.target { out = try? await ssh(t, cmd, timeout: 15) } else { out = try? await Shell.run("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level", "vm.swapusage", "hw.memsize"], timeout: 15) }
+        return out.flatMap(HostMemory.parse)
+    }
+
     /// nil when the host has no native runner dirs.
     func nativeSnapshot(_ host: HostSpec) async throws -> VMSnapshot? {
         let out: String
