@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.6 - 2026-10-20
+
+- Recent failures in the Capacity window now show the date and time each failure happened. The "minutes ago" they showed before were only worked out when the window was last drawn, so a window left open or minimised could show an old failure as just now. Hover a row to see how long ago it was.
+
 ## 0.1.5 - 2026-10-16
 
 - A job that has just started is no longer wrongly shown as stalled. Hangar used to count the previous job's log as the new job's output, so a brief job could appear silent for an hour.
