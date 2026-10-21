@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.8 - 2026-10-21
+
+- A Mac that runs its runners only inside a virtual machine is now labelled with the Mac's own name on its cards, such as "iMac", instead of the name used inside the virtual machine ("colima").
+
 ## 0.1.7 - 2026-10-21
 
 - A runner on a Mac that is short of memory now says so. When macOS reports memory pressure, or most of its swap is in use, one card on that Mac shows "Mac memory pressure: high" or "Mac swap 81% full", and a notification is sent once. Hover the line for the swap figures. A virtual machine on a Mac that is swapping slows down without any error inside it, which is hard to notice otherwise.
