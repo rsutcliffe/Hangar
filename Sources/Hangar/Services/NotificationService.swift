@@ -5,7 +5,7 @@ import UserNotifications
 @MainActor
 final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     enum Event: String { case stalled, failed }
-    private var sent: Set<String> = []
+    private var gate = NotifyGate.load()
 
     /// Asks once; `onDenied` runs on the main actor if the user has turned Hangar's notifications off.
     func requestAuthorization(onDenied: @escaping @MainActor () -> Void) {
@@ -28,13 +28,36 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     }
 
     /// A non-urgent notice (disk, long run, failure pattern). The caller decides when it may be shown.
-    func notifyNotice(title: String, body: String) {
+    /// `key` names the thing being reported (not its wording, which can change), so the same condition is not announced again for `NotifyGate.noticeCooldown`.
+    func notifyNotice(key: String, title: String, body: String) {
+        guard allow("notice:\(key)", cooldown: NotifyGate.noticeCooldown) else { return }
         let c = UNMutableNotificationContent()
         c.title = title; c.body = body; c.sound = .default
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "notice-\(abs((title + body).hashValue))-\(Int(Date().timeIntervalSince1970))", content: c, trigger: nil))
+        c.threadIdentifier = "notices"
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "notice-\(abs(key.hashValue))-\(Int(Date().timeIntervalSince1970))", content: c, trigger: nil))
+    }
+
+    /// Applies the persisted cooldown and the global burst cap. Anything over the cap is folded into one summary alert.
+    private func allow(_ key: String, cooldown: TimeInterval) -> Bool {
+        let verdict = gate.allow(key, cooldown: cooldown, now: Date())
+        gate.save()
+        switch verdict {
+        case .send: return true
+        case .suppressed: return false
+        case .burst(let needsSummary):
+            if needsSummary {
+                let c = UNMutableNotificationContent()
+                c.title = "More Hangar alerts"
+                c.body = "Several alerts were held back so they do not flood you. Open Hangar to see what needs attention."
+                c.threadIdentifier = "notices"
+                UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "hangar-summary", content: c, trigger: nil))
+            }
+            return false
+        }
     }
 
     func notifyRestartFailed(runner: String, host: String) {
+        guard allow("restart:\(runner)", cooldown: NotifyGate.outageCooldown) else { return }
         let c = UNMutableNotificationContent()
         c.title = "Runner did not come back"
         c.body = host.isEmpty ? "\(runner) is still offline after a restart." : "\(runner) on \(host) is still offline after a restart."
@@ -44,6 +67,7 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
 
     /// One alert per confirmed outage; the tracker guarantees it is only called once per outage.
     func notifyOffline(runner: String, host: String) {
+        guard allow("offline:\(runner)", cooldown: NotifyGate.outageCooldown) else { return }
         let text = NotificationText.offline(runner: runner, host: host)
         let c = UNMutableNotificationContent()
         c.title = text.title; c.body = text.body; c.sound = .default
@@ -58,7 +82,7 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     /// Returns true if it was new (not previously sent).
     @discardableResult
     func notify(_ event: Event, jobId: Int, runner: String, job: ActiveJob, silentMinutes: Int) -> Bool {
-        guard sent.insert("\(jobId):\(event.rawValue)").inserted else { return false }
+        guard allow("job:\(jobId):\(event.rawValue)", cooldown: NotifyGate.jobCooldown) else { return false }
         let c = UNMutableNotificationContent()
         switch event {
         case .stalled:
@@ -71,6 +95,7 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
                 ?? "\(job.title) on \(runner) failed at step \(step)."
         }
         c.sound = .default
+        c.threadIdentifier = event.rawValue
         let req = UNNotificationRequest(identifier: "\(jobId)-\(event.rawValue)-\(Int(Date().timeIntervalSince1970))", content: c, trigger: nil)
         UNUserNotificationCenter.current().add(req)
         return true

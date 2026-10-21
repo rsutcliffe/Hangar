@@ -1240,4 +1240,22 @@ final class UpdateCheckTests: XCTestCase {
         XCTAssertFalse(old.isRepeat(rec(8, "a", "e2e", 0)))                              // last failure 4h ago: the incident is over, alert again
         XCTAssertFalse(log.isRepeat(rec(1, "a", "e2e", 3600)))                           // a job is never a repeat of itself
     }
+
+    func testNotifyGateCooldownBurstCapAndPersistence() throws {
+        let t0 = Date(timeIntervalSince1970: 2_000_000_000)
+        var g = NotifyGate()
+        XCTAssertEqual(g.allow("a", cooldown: 3600, now: t0), .send)
+        XCTAssertEqual(g.allow("a", cooldown: 3600, now: t0.addingTimeInterval(3599)), .suppressed)      // same thing, inside the cooldown
+        XCTAssertEqual(g.allow("a", cooldown: 3600, now: t0.addingTimeInterval(3601)), .send)            // after it
+        // Persisted: a reopened Hangar still knows what it said.
+        var reopened = try JSONDecoder().decode(NotifyGate.self, from: JSONEncoder().encode(g))
+        XCTAssertEqual(reopened.allow("a", cooldown: 3600, now: t0.addingTimeInterval(3700)), .suppressed)
+        // Burst cap: four go out in ten minutes, the rest fold into one summary.
+        var b = NotifyGate()
+        for k in 0..<4 { XCTAssertEqual(b.allow("k\(k)", cooldown: 60, now: t0), .send) }
+        XCTAssertEqual(b.allow("k4", cooldown: 60, now: t0), .burst(needsSummary: true))
+        XCTAssertEqual(b.allow("k5", cooldown: 60, now: t0.addingTimeInterval(1)), .burst(needsSummary: false))
+        XCTAssertEqual(b.allow("k6", cooldown: 60, now: t0.addingTimeInterval(601)), .send)               // the window has passed
+        XCTAssertEqual(b.allow("k4", cooldown: 3600, now: t0.addingTimeInterval(700)), .suppressed)       // a folded alert is not repeated later
+    }
 }

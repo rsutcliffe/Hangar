@@ -244,3 +244,43 @@ enum ThrottleRule {
         return d
     }
 }
+
+/// Decides whether a notification may go out. Kept on disk, so quitting and reopening Hangar does not repeat what was already said,
+/// and with a cap so a burst of events becomes one summary instead of a flood.
+struct NotifyGate: Codable, Equatable, Sendable {
+    static let noticeCooldown: TimeInterval = 6 * 3600       // disk, memory, repeat-failure and long-run notices
+    static let outageCooldown: TimeInterval = 3600           // a runner going offline, or not coming back
+    static let jobCooldown: TimeInterval = 24 * 3600         // one job's failure or stall
+    static let burstWindow: TimeInterval = 600
+    static let burstLimit = 4
+
+    enum Verdict: Equatable { case send, suppressed, burst(needsSummary: Bool) }
+
+    var sent: [String: Date] = [:]
+    var recent: [Date] = []
+    var lastSummary: Date?
+
+    mutating func allow(_ key: String, cooldown: TimeInterval, now: Date) -> Verdict {
+        sent = sent.filter { now.timeIntervalSince($0.value) < 48 * 3600 }
+        recent = recent.filter { now.timeIntervalSince($0) < Self.burstWindow }
+        if let t = sent[key], now.timeIntervalSince(t) < cooldown { return .suppressed }
+        sent[key] = now                                     // counted as said even when folded into the summary
+        if recent.count >= Self.burstLimit {
+            let needs = lastSummary.map { now.timeIntervalSince($0) >= Self.burstWindow } ?? true
+            if needs { lastSummary = now }
+            return .burst(needsSummary: needs)
+        }
+        recent.append(now)
+        return .send
+    }
+
+    private static let defaultsKey = "notifyGate"
+
+    static func load(_ d: UserDefaults = .standard) -> NotifyGate {
+        d.data(forKey: defaultsKey).flatMap { try? JSONDecoder().decode(NotifyGate.self, from: $0) } ?? NotifyGate()
+    }
+
+    func save(_ d: UserDefaults = .standard) {
+        if let data = try? JSONEncoder().encode(self) { d.set(data, forKey: Self.defaultsKey) }
+    }
+}

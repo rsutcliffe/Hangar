@@ -231,7 +231,7 @@ final class MonitorStore {
                 resume(id)
             }
             if !d.hold.isEmpty {
-                notifier.notifyNotice(title: "Idle runners held back", body: "\(host.isEmpty ? "This Mac" : host) is low on memory. \(d.hold.joined(separator: ", ")) paused until it eases, so the running job can finish.")
+                notifier.notifyNotice(key: "held|\(host)", title: "Idle runners held back", body: "\(host.isEmpty ? "This Mac" : host) is low on memory. \(d.hold.joined(separator: ", ")) paused until it eases, so the running job can finish.")
             }
         }
         if recordHistory { UserDefaults.standard.set(intents.filter(\.value.held).map(\.key), forKey: "heldRunners") }
@@ -296,7 +296,7 @@ final class MonitorStore {
             let k = "\(o.id)|\(key)"
             guard active else { noticesSent.remove(k); return }
             guard !quiet, noticesSent.insert(k).inserted else { return }           // quiet: not marked, so it is sent when quiet ends
-            notifier.notifyNotice(title: title, body: body)
+            notifier.notifyNotice(key: k, title: title, body: body)
         }
         let disk = showDisk ? DiskRule.warning(freeKB: o.diskFreeKB, usedPct: o.diskUsedPct, vm: !o.native) : nil
         once("disk", active: disk != nil, title: o.native ? "Runner disk low" : "VM disk low", body: "\(o.id)\(o.host.isEmpty ? "" : " on \(o.host)"): \(disk ?? "")")
