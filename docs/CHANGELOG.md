@@ -2,6 +2,12 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.7 - 2026-10-21
+
+- A runner on a Mac that is short of memory now says so. When macOS reports memory pressure, or most of its swap is in use, one card on that Mac shows "Mac memory pressure: high" or "Mac swap 81% full", and a notification is sent once. Hover the line for the swap figures. A virtual machine on a Mac that is swapping slows down without any error inside it, which is hard to notice otherwise.
+- "Failed N times in a row" now leaves the main window an hour after the last failure, so it only shows while it is current. The failures are still listed under Recent failures in the Capacity window.
+- Notes that apply to a whole machine, such as low disk space or memory, now stay on the same card from one refresh to the next. They could previously move between cards.
+
 ## 0.1.6 - 2026-10-20
 
 - Recent failures in the Capacity window now show the date and time each failure happened. The "minutes ago" they showed before were only worked out when the window was last drawn, so a window left open or minimised could show an old failure as just now. Hover a row to see how long ago it was.
