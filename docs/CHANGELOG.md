@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.10 - 2026-10-22
+
+- A job that keeps failing now sends one notification, not one for every failure. When the same job (same repository, workflow and job name) fails again within 3 hours of its last failure, on any runner, the card still shows the failure and it is still recorded in the Capacity window, but there is no new notification. After 3 hours without a failure, the next one notifies again.
+
 ## 0.1.9 - 2026-10-21
 
 - New, off by default: "Protect running jobs when a Mac is low on memory" in Settings. While a Mac reports memory pressure, its idle runners are paused so the job already running has the best chance of finishing. A running job is never touched. The paused runners show "Held back: low memory" and resume once memory has been normal for 5 minutes, or when nothing on that Mac is running. If Hangar is quit while runners are held, it resumes them the next time it opens. It only works while Hangar is open.
