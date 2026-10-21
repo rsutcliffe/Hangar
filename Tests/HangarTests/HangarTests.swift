@@ -1144,6 +1144,9 @@ final class UpdateCheckTests: XCTestCase {
         XCTAssertEqual(m.swapUsedMB, 4172.31, accuracy: 0.01); XCTAssertEqual(m.ramGB, 16, accuracy: 0.001)
         XCTAssertEqual(HostMemory.parse("1\ntotal = 2.00G  used = 1.00G  free = 1.00G\n8589934592")?.swapTotalMB, 2048)
         XCTAssertNil(HostMemory.parse("")); XCTAssertNil(HostMemory.parse("x\ny\nz"))
+        let withName = "1\ntotal = 1024.00M  used = 497.00M  free = 527.00M  (encrypted)\n17179869184\niMac.local\n"
+        XCTAssertEqual(HostMemory.parseName(withName), "iMac.local"); XCTAssertEqual(SnapshotParser.shortName(HostMemory.parseName(withName)!), "iMac")
+        XCTAssertNil(HostMemory.parseName("1\ntotal = 1.00M  used = 1.00M  free = 0.00M\n1024\n"))
     }
     func testMemoryRuleWarnsOnPressureOrMostlyFullSwap() {
         func m(_ level: Int, _ used: Double, _ total: Double) -> HostMemory { HostMemory(pressureLevel: level, swapUsedMB: used, swapTotalMB: total, ramGB: 16) }

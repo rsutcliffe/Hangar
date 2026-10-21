@@ -182,6 +182,14 @@ struct HostMemory: Equatable, Sendable {
     }
 }
 
+extension HostMemory {
+    /// The fourth line of the same output: the Mac's hostname, as "iMac.local".
+    static func parseName(_ out: String) -> String? {
+        let lines = out.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        return lines.count >= 4 && !lines[3].isEmpty ? lines[3] : nil
+    }
+}
+
 enum MemoryRule {
     static let swapFullPct = 75
     static let swapMinUsedMB = 2048.0

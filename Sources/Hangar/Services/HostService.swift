@@ -205,12 +205,14 @@ actor HostService {
         return withRunnerCPU(snap, key: key)
     }
 
-    /// The Mac's own memory state; nil on a host that is not macOS or cannot be read.
-    func hostMemory(_ host: HostSpec) async -> HostMemory? {
-        let cmd = "sysctl -n kern.memorystatus_vm_pressure_level vm.swapusage hw.memsize"
+    /// The Mac's own memory state and name; nil on a host that is not macOS or cannot be read.
+    /// The name comes from the Mac, because a host with only a Colima VM would otherwise be labelled with the VM's name.
+    func hostProbe(_ host: HostSpec) async -> (memory: HostMemory?, name: String?) {
+        let keys = ["kern.memorystatus_vm_pressure_level", "vm.swapusage", "hw.memsize", "kern.hostname"]
         let out: String?
-        if let t = host.target { out = try? await ssh(t, cmd, timeout: 15) } else { out = try? await Shell.run("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level", "vm.swapusage", "hw.memsize"], timeout: 15) }
-        return out.flatMap(HostMemory.parse)
+        if let t = host.target { out = try? await ssh(t, "sysctl -n " + keys.joined(separator: " "), timeout: 15) }
+        else { out = try? await Shell.run("/usr/sbin/sysctl", ["-n"] + keys, timeout: 15) }
+        return (out.flatMap(HostMemory.parse), out.flatMap(HostMemory.parseName))
     }
 
     /// nil when the host has no native runner dirs.
