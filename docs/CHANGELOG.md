@@ -2,6 +2,12 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.11 - 2026-10-22
+
+- Fewer notifications. Hangar now remembers what it has already told you, even after it is quit and reopened, so it no longer repeats every current problem each time it starts.
+- Each kind of alert has a cooldown: a given job's failure or stall once per day, a runner going offline once per hour, and disk, memory, repeat-failure and long-run notices once per six hours. A notice is matched by what it is about, not by its wording, so a changing figure no longer makes it a new alert.
+- No more than four alerts in ten minutes. Anything beyond that is folded into one "More Hangar alerts" notification. The cards and the Capacity window still show everything.
+
 ## 0.1.10 - 2026-10-22
 
 - A job that keeps failing now sends one notification, not one for every failure. When the same job (same repository, workflow and job name) fails again within 3 hours of its last failure, on any runner, the card still shows the failure and it is still recorded in the Capacity window, but there is no new notification. After 3 hours without a failure, the next one notifies again.
