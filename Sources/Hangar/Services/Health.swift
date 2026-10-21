@@ -198,3 +198,14 @@ enum MemoryRule {
         return nil
     }
 }
+
+/// "Failed N times in a row" is only useful while it is current: an hour after the last failure it leaves the main window.
+/// The failures themselves stay in the Capacity window's list.
+enum StreakRule {
+    static let window: TimeInterval = 3600
+
+    static func shown(_ streak: Int?, lastFailure: Date?, now: Date) -> Int? {
+        guard let streak, let lastFailure, now.timeIntervalSince(lastFailure) <= window else { return nil }
+        return streak
+    }
+}

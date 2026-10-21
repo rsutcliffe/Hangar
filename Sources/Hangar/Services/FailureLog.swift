@@ -46,6 +46,8 @@ struct FailureLog: Codable, Equatable, Sendable {
         entries = Array(entries.filter { $0.at >= oldest }.prefix(Self.maxEntries))
     }
 
+    func lastFailure(runner: String) -> Date? { entries.first { $0.runner == runner }?.at }
+
     func recent(_ n: Int, runner: String? = nil) -> [FailureRecord] {
         Array(entries.filter { runner == nil || $0.runner == runner }.prefix(n))
     }
@@ -76,7 +78,7 @@ struct FailureLog: Codable, Equatable, Sendable {
     static func demo(now: Date) -> FailureLog {
         var log = FailureLog()
         let rows: [(String, String, String, String, Int, TimeInterval)] = [
-            ("arm-02", "web", "Run unit tests", "test", 4, 2 * 3600), ("arm-01", "api-server", "Checkout", "build", 2, 5 * 3600),
+            ("arm-02", "web", "Run unit tests", "test", 4, 25 * 60), ("arm-01", "api-server", "Checkout", "build", 2, 5 * 3600),
             ("arm-02", "web", "Run unit tests", "test", 4, 26 * 3600), ("x86-01", "ios-app", "Install dependencies", "Unit tests", 3, 3 * 86_400),
         ]
         for (i, r) in rows.enumerated() {

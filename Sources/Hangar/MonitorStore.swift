@@ -164,7 +164,7 @@ final class MonitorStore {
                 jobHistory.recordSuccess(jobKey: prev.historyKey, runner: o.id, seconds: now.timeIntervalSince(prev.startedAt))
             }
             let longRun = (state == .running || state == .stalled) ? shown.flatMap { jobHistory.longRunFactor(jobKey: $0.historyKey, elapsed: now.timeIntervalSince($0.startedAt)) } : nil
-            let streak = jobHistory.streak(runner: o.id)
+            let streak = StreakRule.shown(jobHistory.streak(runner: o.id), lastFailure: failures.lastFailure(runner: o.id), now: now)
             notices(o, showDisk: showDisk, showMemory: showMemory, longRun: longRun, streak: streak, job: shown, config: config, now: now)
             if let p = runners.first(where: { $0.id == o.id }), p.job != nil, shown == nil, state != .restarting { lastEnded[o.id] = now }
             if let j = shown {

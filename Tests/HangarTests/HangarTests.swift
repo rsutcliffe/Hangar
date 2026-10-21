@@ -1168,4 +1168,20 @@ final class UpdateCheckTests: XCTestCase {
             XCTAssertEqual(withNote, ["a"])
         }
     }
+
+    func testFailureStreakLeavesTheMainWindowAnHourAfterTheLastFailure() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        XCTAssertEqual(StreakRule.shown(10, lastFailure: now.addingTimeInterval(-59 * 60), now: now), 10)
+        XCTAssertEqual(StreakRule.shown(10, lastFailure: now.addingTimeInterval(-3600), now: now), 10)     // exactly an hour: still shown
+        XCTAssertNil(StreakRule.shown(10, lastFailure: now.addingTimeInterval(-3601), now: now))
+        XCTAssertNil(StreakRule.shown(10, lastFailure: nil, now: now))                                       // no recorded failure: not current
+        XCTAssertNil(StreakRule.shown(nil, lastFailure: now, now: now))
+        var log = FailureLog()
+        func rec(_ id: Int, _ runner: String, _ ago: TimeInterval) -> FailureRecord {
+            FailureRecord(jobID: id, runner: runner, repo: "r", workflow: "W", job: "j", stepName: nil, stepNumber: nil, at: now.addingTimeInterval(-ago), url: nil)
+        }
+        log.record(rec(1, "a", 7200), now: now); log.record(rec(2, "a", 600), now: now); log.record(rec(3, "b", 90_000), now: now)
+        XCTAssertEqual(log.lastFailure(runner: "a"), now.addingTimeInterval(-600))
+        XCTAssertNil(log.lastFailure(runner: "c"))
+    }
 }
