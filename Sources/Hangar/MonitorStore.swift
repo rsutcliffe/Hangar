@@ -28,6 +28,7 @@ final class MonitorStore {
     private var intents: [String: RunnerIntent] = [:]
     private var failureSeen: [Int: Date] = [:]          // job id -> first seen failed
     private var dismissedFailures: Set<Int> = []
+    private var quietFailures: Set<Int> = []              // job ids that failed again: shown on the card, no notification
     private var history: [String: [Double]] = [:]
     private var runnerCPUHistory: [String: [Double]] = [:]      // last 3 per-runner CPU samples
     private var lastEnded: [String: Date] = [:]
@@ -136,9 +137,11 @@ final class MonitorStore {
                 else if failureSeen[j.id] == nil {
                     failureSeen[j.id] = min(now, j.lastOutputAt)                // hold counts from when it failed
                     jobHistory.recordFailure(jobKey: j.historyKey, runner: o.id)
-                    failures.record(FailureRecord(jobID: j.id, runner: o.id, repo: j.repo, workflow: j.workflow, job: j.jobName,
-                                                  stepName: j.failedStepName, stepNumber: j.failedStep, at: min(now, j.lastOutputAt),
-                                                  url: j.url?.absoluteString), now: now)
+                    let record = FailureRecord(jobID: j.id, runner: o.id, repo: j.repo, workflow: j.workflow, job: j.jobName,
+                                               stepName: j.failedStepName, stepNumber: j.failedStep, at: min(now, j.lastOutputAt),
+                                               url: j.url?.absoluteString)
+                    if failures.isRepeat(record) { quietFailures.insert(j.id) }
+                    failures.record(record, now: now)
                 }
             }
             let seen = obs.job.flatMap { failureSeen[$0.id] }
@@ -173,7 +176,7 @@ final class MonitorStore {
             if let j = shown {
                 let silent = Int(now.timeIntervalSince(j.lastOutputAt) / 60)
                 if state == .stalled { notifier.notify(.stalled, jobId: j.id, runner: o.id, job: j, silentMinutes: silent) }
-                if state == .failed { notifier.notify(.failed, jobId: j.id, runner: o.id, job: j, silentMinutes: 0) }
+                if state == .failed, !quietFailures.contains(j.id) { notifier.notify(.failed, jobId: j.id, runner: o.id, job: j, silentMinutes: 0) }
             }
             if outageTracker.observe(id: o.id, state: state) { notifier.notifyOffline(runner: o.id, host: o.host) }
             if o.listenerRunning || o.busy { lastActive[o.id] = now }

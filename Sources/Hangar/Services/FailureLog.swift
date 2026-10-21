@@ -46,6 +46,17 @@ struct FailureLog: Codable, Equatable, Sendable {
         entries = Array(entries.filter { $0.at >= oldest }.prefix(Self.maxEntries))
     }
 
+    /// The same job (repo, workflow and job name, on any runner) already failed within `window` before this one: it is a repeat,
+    /// so it need not interrupt again. Each repeat keeps the window open, so a job that keeps failing alerts once.
+    static let repeatWindow: TimeInterval = 3 * 3600
+
+    func isRepeat(_ r: FailureRecord, window: TimeInterval = FailureLog.repeatWindow) -> Bool {
+        entries.contains {
+            $0.jobID != r.jobID && $0.repo == r.repo && $0.workflow == r.workflow && $0.job == r.job
+                && r.at >= $0.at && r.at.timeIntervalSince($0.at) <= window
+        }
+    }
+
     func lastFailure(runner: String) -> Date? { entries.first { $0.runner == runner }?.at }
 
     func recent(_ n: Int, runner: String? = nil) -> [FailureRecord] {

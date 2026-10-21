@@ -1222,4 +1222,22 @@ final class UpdateCheckTests: XCTestCase {
         let held = await s.runners.filter(\.held).map(\.id)
         XCTAssertEqual(held, ["b"])
     }
+
+    func testARepeatOfTheSameFailingJobIsQuiet() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        func rec(_ id: Int, _ runner: String, _ job: String, _ ago: TimeInterval) -> FailureRecord {
+            FailureRecord(jobID: id, runner: runner, repo: "r", workflow: "CI", job: job, stepName: nil, stepNumber: nil, at: now.addingTimeInterval(-ago), url: nil)
+        }
+        var log = FailureLog()
+        XCTAssertFalse(log.isRepeat(rec(1, "a", "e2e", 0)))                              // the first failure still alerts
+        log.record(rec(1, "a", "e2e", 3600), now: now)
+        XCTAssertTrue(log.isRepeat(rec(2, "a", "e2e", 0)))                               // an hour later, same job: quiet
+        XCTAssertTrue(log.isRepeat(rec(3, "b", "e2e", 0)))                               // on another runner too
+        XCTAssertFalse(log.isRepeat(rec(4, "a", "unit", 0)))                             // a different job alerts
+        log.record(rec(5, "a", "e2e", 4 * 3600 + 1), now: now)
+        XCTAssertFalse(FailureLog().isRepeat(rec(6, "a", "e2e", 0)))
+        var old = FailureLog(); old.record(rec(7, "a", "e2e", 4 * 3600), now: now)
+        XCTAssertFalse(old.isRepeat(rec(8, "a", "e2e", 0)))                              // last failure 4h ago: the incident is over, alert again
+        XCTAssertFalse(log.isRepeat(rec(1, "a", "e2e", 3600)))                           // a job is never a repeat of itself
+    }
 }
