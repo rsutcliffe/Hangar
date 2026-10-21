@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.9 - 2026-10-21
+
+- New, off by default: "Protect running jobs when a Mac is low on memory" in Settings. While a Mac reports memory pressure, its idle runners are paused so the job already running has the best chance of finishing. A running job is never touched. The paused runners show "Held back: low memory" and resume once memory has been normal for 5 minutes, or when nothing on that Mac is running. If Hangar is quit while runners are held, it resumes them the next time it opens. It only works while Hangar is open.
+
 ## 0.1.8 - 2026-10-21
 
 - A Mac that runs its runners only inside a virtual machine is now labelled with the Mac's own name on its cards, such as "iMac", instead of the name used inside the virtual machine ("colima").
