@@ -3,7 +3,7 @@ import Foundation
 /// Scripted data mirroring the prototype so the UI can be checked with no token or VMs.
 /// Enabled with the `--demo` launch argument.
 final class DemoBackend: MonitorBackend, @unchecked Sendable {
-    enum Scenario: String { case stalled, failed, unreachable, offline, permission }
+    enum Scenario: String { case stalled, failed, unreachable, offline, permission, pressure }
     let scenario: Scenario
     private let lock = NSLock()
     private var restarted: [String: Date] = [:]
@@ -33,7 +33,7 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
                                      runnerCPU: cpu, cpuSupported: true,
                                      diskFreeKB: id == "x86-01" ? 6_500_000 : 60_000_000, diskUsedPct: id == "x86-01" ? 84 : 40,
                                      version: id == "arm-01" ? "2.337.0" : "2.338.0",
-                                     hostMemory: id == "arm-02" ? HostMemory(pressureLevel: 1, swapUsedMB: 4172, swapTotalMB: 5120, ramGB: 16) : nil)
+                                     hostMemory: id == "arm-02" ? HostMemory(pressureLevel: scenario == .pressure ? 2 : 1, swapUsedMB: 4172, swapTotalMB: 5120, ramGB: 16) : nil)
         }
         let wob = Double(Int(now.timeIntervalSince(t0)) % 7)
         // In the unreachable scenario the second host drops out after 10 seconds, as if its SSH connection failed.

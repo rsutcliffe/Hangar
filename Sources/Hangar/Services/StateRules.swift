@@ -32,6 +32,8 @@ struct RunnerIntent: Equatable, Sendable {
     var restartingSince: Date?
     var draining = false
     var paused = false
+    /// Paused by Hangar because its Mac is low on memory (not by the user), so Hangar resumes it.
+    var held = false
 }
 
 enum StallDetector {

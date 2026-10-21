@@ -38,6 +38,8 @@ final class MonitorStore {
     private(set) var failures = FailureLog.load()
     private var latestRunner: String?
     private var noticesSent: Set<String> = []
+    private var calmSince: [String: Date] = [:]            // host -> when its memory last became normal
+    private var staleHeld: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "heldRunners") ?? [])
     private(set) var utilisation = UtilisationLog.load()
     var recordHistory = true
     private var lastActive: [String: Date] = {
@@ -113,6 +115,7 @@ final class MonitorStore {
 
     private func apply(_ snap: BackendSnapshot, config: Config, now: Date) {
         queue = snap.queue.sorted { $0.queuedAt < $1.queuedAt }
+        throttle(snap, config: config, now: now)
         var out: [Runner] = []
         // Runners in one Colima VM share its root disk, so they report identical figures: say it once, on the first.
         // The same pick every poll (probe order is not stable), so a note does not jump between cards.
@@ -179,7 +182,7 @@ final class MonitorStore {
                               draining: intent.draining, job: shown, cpuHistory: history[o.id] ?? [],
                               memUsedGB: o.memUsedGB, lastJobEndedAt: o.lastJobEndedAt ?? lastEnded[o.id],
                               failedAt: seen, host: o.host, standby: o.standby, runnerCPU: cpuAvg,
-                              restartFailed: failedRestarts.contains(o.id), diskFreeKB: showDisk ? o.diskFreeKB : nil, diskUsedPct: showDisk ? o.diskUsedPct : nil, diskIsVM: !o.native, hostMemory: showMemory ? o.hostMemory : nil,
+                              restartFailed: failedRestarts.contains(o.id), diskFreeKB: showDisk ? o.diskFreeKB : nil, diskUsedPct: showDisk ? o.diskUsedPct : nil, diskIsVM: !o.native, held: intent.held, hostMemory: showMemory ? o.hostMemory : nil,
                               version: o.version, latestVersion: snap.latestRunner, latestPublished: snap.latestRunnerPublished, longRunFactor: longRun, failStreak: streak))
         }
         if recordHistory {
@@ -197,6 +200,38 @@ final class MonitorStore {
         NSApplication.shared.dockTile.badgeLabel = ProblemBadge.label(problems)
         notifier.setBadge(problems)
         UserDefaults.standard.set(lastActive.mapValues(\.timeIntervalSince1970), forKey: "lastActive")
+    }
+
+    /// Keeps a Mac under memory pressure to the job it is already running. See ThrottleRule.
+    private func throttle(_ snap: BackendSnapshot, config: Config, now: Date) {
+        func resume(_ id: String) {
+            Task { await run { try await backend.setRunnerService(id, running: true, config: config) }; await refresh() }
+        }
+        // A previous run of Hangar may have held runners and then quit: it cannot have resumed them, so do that first.
+        for o in snap.runners where staleHeld.remove(o.id) != nil { resume(o.id) }
+        for (host, rs) in Dictionary(grouping: snap.runners, by: \.host) {
+            let memory = rs.compactMap(\.hostMemory).first
+            let underPressure = (memory?.pressureLevel ?? 1) >= 2
+            if memory != nil { if underPressure { calmSince[host] = nil } else if calmSince[host] == nil { calmSince[host] = now } }
+            let candidates = rs.map { o -> ThrottleRule.Candidate in
+                let i = intents[o.id] ?? RunnerIntent()
+                let free = !o.busy && o.ghOnline && o.listenerRunning && !i.draining && !i.paused && i.restartingSince == nil
+                return .init(id: o.id, busy: o.busy, canHold: free, held: i.held)
+            }
+            let d = ThrottleRule.decide(candidates, protect: config.protectJobs, underPressure: underPressure, calmSince: calmSince[host], now: now)
+            for id in d.hold {
+                var i = intents[id] ?? RunnerIntent(); i.held = true; i.paused = true; intents[id] = i
+                stopService(id, config: config)
+            }
+            for id in d.release {
+                var i = intents[id] ?? RunnerIntent(); i.held = false; i.paused = false; i.restartingSince = now; intents[id] = i
+                resume(id)
+            }
+            if !d.hold.isEmpty {
+                notifier.notifyNotice(title: "Idle runners held back", body: "\(host.isEmpty ? "This Mac" : host) is low on memory. \(d.hold.joined(separator: ", ")) paused until it eases, so the running job can finish.")
+            }
+        }
+        if recordHistory { UserDefaults.standard.set(intents.filter(\.value.held).map(\.key), forKey: "heldRunners") }
     }
 
     nonisolated static func diskKey(_ o: RunnerObservation) -> String { "\(o.host)|\(o.native)|\(o.diskFreeKB ?? -1)|\(o.diskUsedPct ?? -1)" }

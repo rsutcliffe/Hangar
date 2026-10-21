@@ -217,3 +217,30 @@ enum StreakRule {
         return streak
     }
 }
+
+/// Under memory pressure, keep a Mac to the job it is already running: idle runners wait, and busy ones are never touched.
+enum ThrottleRule {
+    /// How long memory has to stay normal before held runners are let go.
+    static let calmFor: TimeInterval = 300
+
+    struct Candidate: Equatable, Sendable {
+        var id: String
+        var busy: Bool
+        /// Idle, online, and not already paused or restarting by the user.
+        var canHold: Bool
+        var held: Bool
+    }
+
+    struct Decision: Equatable, Sendable { var hold: [String] = []; var release: [String] = [] }
+
+    /// One Mac's runners. Held runners come back when memory has been normal for `calmFor`, when nothing on the Mac is running
+    /// (so queued work cannot wait forever on a stale reading), or when the setting is switched off.
+    static func decide(_ runners: [Candidate], protect: Bool, underPressure: Bool, calmSince: Date?, now: Date) -> Decision {
+        let anyBusy = runners.contains { $0.busy }
+        var d = Decision()
+        if protect, underPressure, anyBusy { d.hold = runners.filter { $0.canHold && !$0.held }.map(\.id) }
+        let calm = !underPressure && calmSince.map { now.timeIntervalSince($0) >= calmFor } == true
+        if !protect || calm || !anyBusy { d.release = runners.filter(\.held).map(\.id) }
+        return d
+    }
+}

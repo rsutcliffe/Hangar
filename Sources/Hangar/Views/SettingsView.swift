@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var badgeAllowed = true
     @AppStorage(Config.Key.quietEnabled) private var quietEnabled = false
     @AppStorage(Config.Key.checkUpdates) private var checkUpdates = true
+    @AppStorage(Config.Key.protectJobs) private var protectJobs = false
     @AppStorage(Config.Key.quietStart) private var quietStart = 22
     @AppStorage(Config.Key.quietEnd) private var quietEnd = 7
     @State private var report: ConnectionReport?
@@ -47,6 +48,11 @@ struct SettingsView: View {
                     }
                 }
                 Toggle("Tell me when a new Hangar release is available", isOn: $checkUpdates)
+                Toggle("Protect running jobs when a Mac is low on memory", isOn: $protectJobs)
+                if protectJobs {
+                    Text("While a Mac reports memory pressure, its idle runners are paused so the job already running can finish. A running job is never touched. They resume when memory has been normal for 5 minutes. Works only while Hangar is open.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if let e = loginItem.error { Text(e).font(.caption).foregroundStyle(.red) }
                 if !badgeAllowed {
                     Text("The Dock badge is off. Turn on “Badge app icon” for Hangar in System Settings ▸ Notifications.")

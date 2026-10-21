@@ -7,6 +7,7 @@ struct Config: Equatable, Sendable {
         static let hosts = "hosts"
         static let quietEnabled = "quietEnabled"
         static let checkUpdates = "checkUpdates"
+        static let protectJobs = "protectJobs"
         static let quietStart = "quietStart"
         static let quietEnd = "quietEnd"
         static let stallMinutes = "stallMinutes"
@@ -21,6 +22,8 @@ struct Config: Equatable, Sendable {
     var quietEnabled = false
     /// Look for a newer Hangar release on GitHub (on unless switched off).
     var checkUpdates = true
+    /// Hold back idle runners on a Mac that reports memory pressure, so the job already running can finish. Off unless switched on.
+    var protectJobs = false
     var quietStart = 22
     var quietEnd = 7
     var pollSeconds = 15
@@ -37,6 +40,7 @@ struct Config: Equatable, Sendable {
         let stall = d.integer(forKey: Key.stallMinutes)
         if stall > 0 { c.stallMinutes = stall }
         c.quietEnabled = d.bool(forKey: Key.quietEnabled)
+        c.protectJobs = d.bool(forKey: Key.protectJobs)
         if d.object(forKey: Key.checkUpdates) != nil { c.checkUpdates = d.bool(forKey: Key.checkUpdates) }
         if d.object(forKey: Key.quietStart) != nil { c.quietStart = min(23, max(0, d.integer(forKey: Key.quietStart))) }
         if d.object(forKey: Key.quietEnd) != nil { c.quietEnd = min(23, max(0, d.integer(forKey: Key.quietEnd))) }

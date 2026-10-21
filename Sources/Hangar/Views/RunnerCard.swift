@@ -128,7 +128,7 @@ struct RunnerCard: View {
         if let j = runner.job { return j.title }
         switch s {
         case .restarting: return "Restarting runner"
-        case .paused: return "Draining finished"
+        case .paused: return runner.held ? "Held back: low memory" : "Draining finished"
         case .offline: return "Not connected"
         case .unreachable: return "Host unreachable"
         default: return "No job"
@@ -144,6 +144,7 @@ struct RunnerCard: View {
 
     private var line2: String {
         guard let j = runner.job else {
+            if runner.held { return "Resumes when memory eases" }
             if let end = runner.lastJobEndedAt, s == .idle || s == .paused { return "Last ran \(Format.duration(now.timeIntervalSince(end))) ago" }
             if s == .unreachable { return runner.lastSeenAt.map { "Last seen \(Format.duration(now.timeIntervalSince($0))) ago" } ?? " " }
             if runner.restartFailed { return "Did not come back after restart" }

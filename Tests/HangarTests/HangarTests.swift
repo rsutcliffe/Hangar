@@ -1187,4 +1187,39 @@ final class UpdateCheckTests: XCTestCase {
         XCTAssertEqual(log.lastFailure(runner: "a"), now.addingTimeInterval(-600))
         XCTAssertNil(log.lastFailure(runner: "c"))
     }
+
+    func testThrottleHoldsIdleRunnersOnlyWhileAnotherJobRunsUnderPressure() {
+        func c(_ id: String, busy: Bool = false, held: Bool = false) -> ThrottleRule.Candidate { .init(id: id, busy: busy, canHold: !busy && !held, held: held) }
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        // Pressure with one job running: the idle ones wait, the busy one is not touched.
+        XCTAssertEqual(ThrottleRule.decide([c("a", busy: true), c("b"), c("c")], protect: true, underPressure: true, calmSince: nil, now: now).hold, ["b", "c"])
+        // Switched off, or no pressure, or nothing running: nothing is held.
+        XCTAssertTrue(ThrottleRule.decide([c("a", busy: true), c("b")], protect: false, underPressure: true, calmSince: nil, now: now).hold.isEmpty)
+        XCTAssertTrue(ThrottleRule.decide([c("a", busy: true), c("b")], protect: true, underPressure: false, calmSince: now, now: now).hold.isEmpty)
+        XCTAssertTrue(ThrottleRule.decide([c("a"), c("b")], protect: true, underPressure: true, calmSince: nil, now: now).hold.isEmpty)
+    }
+    func testThrottleReleasesAfterFiveCalmMinutesOrWhenNothingRuns() {
+        func c(_ id: String, busy: Bool = false, held: Bool = false) -> ThrottleRule.Candidate { .init(id: id, busy: busy, canHold: false, held: held) }
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let held = [c("a", busy: true), c("b", held: true)]
+        XCTAssertTrue(ThrottleRule.decide(held, protect: true, underPressure: true, calmSince: nil, now: now).release.isEmpty)               // still pressured, job still running
+        XCTAssertTrue(ThrottleRule.decide(held, protect: true, underPressure: false, calmSince: now.addingTimeInterval(-299), now: now).release.isEmpty)
+        XCTAssertEqual(ThrottleRule.decide(held, protect: true, underPressure: false, calmSince: now.addingTimeInterval(-300), now: now).release, ["b"])
+        XCTAssertEqual(ThrottleRule.decide([c("a"), c("b", held: true)], protect: true, underPressure: true, calmSince: nil, now: now).release, ["b"])   // nothing running: do not strand queued work
+        XCTAssertEqual(ThrottleRule.decide(held, protect: false, underPressure: true, calmSince: nil, now: now).release, ["b"])                         // setting switched off
+    }
+    func testStoreHoldsAnIdleRunnerUnderPressureAndNeverTouchesABusyOne() async {
+        UserDefaults.standard.set(true, forKey: Config.Key.protectJobs); defer { UserDefaults.standard.removeObject(forKey: Config.Key.protectJobs) }
+        func obs(_ id: String, busy: Bool) -> RunnerObservation {
+            RunnerObservation(id: id, arch: .arm64, cpus: 2, memoryGB: 4, vmRunning: true, ghOnline: true, busy: busy, host: "box",
+                              job: nil, cpuPercent: 1, memUsedGB: 1, lastJobEndedAt: nil,
+                              hostMemory: HostMemory(pressureLevel: 2, swapUsedMB: 4000, swapTotalMB: 5000, ramGB: 16))
+        }
+        let snap = BackendSnapshot(runners: [obs("a", busy: true), obs("b", busy: false)], queue: [])
+        let backend = FakeBackend([.success(snap)])
+        let s = await MainActor.run { () -> MonitorStore in let s = MonitorStore(backend: backend); s.recordHistory = false; return s }
+        await s.refresh()
+        let held = await s.runners.filter(\.held).map(\.id)
+        XCTAssertEqual(held, ["b"])
+    }
 }

@@ -67,6 +67,8 @@ struct Runner: Identifiable, Equatable, Sendable {
     var diskUsedPct: Int?
     /// The figures are for a Colima VM's disk, which its runners share (not a Mac's own disk).
     var diskIsVM = false
+    /// Paused by Hangar because its Mac is low on memory.
+    var held = false
     /// The Mac's memory state; set on one runner per host, like the disk figures.
     var hostMemory: HostMemory?
     var version: String?
