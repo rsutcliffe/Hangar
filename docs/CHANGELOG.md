@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.12 - 2026-10-23
+
+- "Mac memory pressure: high" now appears only once macOS has reported memory pressure for five minutes in a row. macOS flips between normal and warning often on a busy Mac, so the note used to flicker on and off. The notification and the optional "Protect running jobs" setting use the same rule. The swap-use note is unchanged.
+
 ## 0.1.11 - 2026-10-22
 
 - Fewer notifications. Hangar now remembers what it has already told you, even after it is quit and reopened, so it no longer repeats every current problem each time it starts.
