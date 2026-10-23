@@ -39,6 +39,9 @@ final class MonitorStore {
     private(set) var failures = FailureLog.load()
     private var latestRunner: String?
     private var noticesSent: Set<String> = []
+    private var pressureSince: [String: Date] = [:]        // host -> when its memory warning began (cleared when it ends)
+    /// How long a warning has to last before it is reported. A test or the demo can set 0.
+    var memorySustain: TimeInterval = MemoryRule.sustain
     private var calmSince: [String: Date] = [:]            // host -> when its memory last became normal
     private var staleHeld: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "heldRunners") ?? [])
     private(set) var utilisation = UtilisationLog.load()
@@ -114,7 +117,17 @@ final class MonitorStore {
         }
     }
 
-    private func apply(_ snap: BackendSnapshot, config: Config, now: Date) {
+    private func apply(_ snapshot: BackendSnapshot, config: Config, now: Date) {
+        var snap = snapshot
+        for host in Set(snap.runners.map(\.host)) {
+            let level = snap.runners.first { $0.host == host && $0.hostMemory != nil }?.hostMemory?.pressureLevel
+            if let level { if level >= 2 { pressureSince[host] = pressureSince[host] ?? now } else { pressureSince[host] = nil } }
+        }
+        snap.runners = snap.runners.map { o in
+            var o = o
+            o.hostMemory = MemoryRule.debounced(o.hostMemory, since: pressureSince[o.host], now: now, sustain: memorySustain)
+            return o
+        }
         queue = snap.queue.sorted { $0.queuedAt < $1.queuedAt }
         throttle(snap, config: config, now: now)
         var out: [Runner] = []

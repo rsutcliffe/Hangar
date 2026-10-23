@@ -1165,7 +1165,7 @@ final class UpdateCheckTests: XCTestCase {
         }
         for order in [["b", "a", "c"], ["c", "a", "b"]] {
             let snap = BackendSnapshot(runners: order.map(obs), queue: [])
-            let s = await MainActor.run { () -> MonitorStore in let s = MonitorStore(backend: FakeBackend([.success(snap)])); s.recordHistory = false; return s }
+            let s = await MainActor.run { () -> MonitorStore in let s = MonitorStore(backend: FakeBackend([.success(snap)])); s.recordHistory = false; s.memorySustain = 0; return s }
             await s.refresh()
             let withNote = await s.runners.filter { !$0.notes.filter { $0.text.hasPrefix("Mac memory") }.isEmpty }.map(\.id)
             XCTAssertEqual(withNote, ["a"])
@@ -1217,7 +1217,7 @@ final class UpdateCheckTests: XCTestCase {
         }
         let snap = BackendSnapshot(runners: [obs("a", busy: true), obs("b", busy: false)], queue: [])
         let backend = FakeBackend([.success(snap)])
-        let s = await MainActor.run { () -> MonitorStore in let s = MonitorStore(backend: backend); s.recordHistory = false; return s }
+        let s = await MainActor.run { () -> MonitorStore in let s = MonitorStore(backend: backend); s.recordHistory = false; s.memorySustain = 0; return s }
         await s.refresh()
         let held = await s.runners.filter(\.held).map(\.id)
         XCTAssertEqual(held, ["b"])
@@ -1257,5 +1257,26 @@ final class UpdateCheckTests: XCTestCase {
         XCTAssertEqual(b.allow("k5", cooldown: 60, now: t0.addingTimeInterval(1)), .burst(needsSummary: false))
         XCTAssertEqual(b.allow("k6", cooldown: 60, now: t0.addingTimeInterval(601)), .send)               // the window has passed
         XCTAssertEqual(b.allow("k4", cooldown: 3600, now: t0.addingTimeInterval(700)), .suppressed)       // a folded alert is not repeated later
+    }
+
+    func testAShortMemoryWarningIsNotReportedUntilItHasLasted() async {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let warn = HostMemory(pressureLevel: 2, swapUsedMB: 100, swapTotalMB: 5000, ramGB: 16)
+        XCTAssertEqual(MemoryRule.debounced(warn, since: nil, now: now)?.pressureLevel, 1)                                  // first sighting
+        XCTAssertEqual(MemoryRule.debounced(warn, since: now.addingTimeInterval(-299), now: now)?.pressureLevel, 1)        // under 5 minutes
+        XCTAssertEqual(MemoryRule.debounced(warn, since: now.addingTimeInterval(-300), now: now)?.pressureLevel, 2)        // sustained
+        let ok = HostMemory(pressureLevel: 1, swapUsedMB: 100, swapTotalMB: 5000, ramGB: 16)
+        XCTAssertEqual(MemoryRule.debounced(ok, since: now.addingTimeInterval(-3600), now: now), ok)
+        XCTAssertNil(MemoryRule.debounced(nil, since: nil, now: now))
+        // Through the store with the real five-minute rule: a first poll at level 2 says nothing yet.
+        func obs(_ id: String) -> RunnerObservation {
+            RunnerObservation(id: id, arch: .arm64, cpus: 2, memoryGB: 4, vmRunning: true, ghOnline: true, busy: false, host: "box",
+                              job: nil, cpuPercent: 1, memUsedGB: 1, lastJobEndedAt: nil, hostMemory: warn)
+        }
+        let snap = BackendSnapshot(runners: [obs("a")], queue: [])
+        let s = await MainActor.run { () -> MonitorStore in let s = MonitorStore(backend: FakeBackend([.success(snap)])); s.recordHistory = false; return s }
+        await s.refresh()
+        let notes = await s.runners.flatMap { $0.notes.map(\.text) }
+        XCTAssertFalse(notes.contains { $0.hasPrefix("Mac memory") }, "\(notes)")
     }
 }

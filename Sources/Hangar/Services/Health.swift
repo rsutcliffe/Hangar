@@ -191,8 +191,18 @@ extension HostMemory {
 }
 
 enum MemoryRule {
+    /// macOS flips between "normal" and "warning" often on a busy Mac, so the warning has to last this long to be reported.
+    static let sustain: TimeInterval = 300
     static let swapFullPct = 75
     static let swapMinUsedMB = 2048.0
+
+    /// The reading with a short-lived warning treated as normal: pressure counts only once it has held for `sustain`.
+    static func debounced(_ m: HostMemory?, since: Date?, now: Date, sustain: TimeInterval = MemoryRule.sustain) -> HostMemory? {
+        guard var m, m.pressureLevel >= 2 else { return m }
+        if let since, now.timeIntervalSince(since) >= sustain { return m }
+        m.pressureLevel = 1
+        return m
+    }
 
     /// A card line and its tooltip, when the Mac is short of memory: the system says so, or most of its swap is in use.
     static func warning(_ m: HostMemory?) -> (text: String, help: String)? {

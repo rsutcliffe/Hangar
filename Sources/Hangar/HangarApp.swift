@@ -15,7 +15,7 @@ struct HangarApp: App {
         var action: ((MonitorStore) -> Void)?
         if demo, args.contains("--scenario-restarting") { action = { $0.restart("arm-02") } }
         if demo, args.contains("--scenario-paused") { action = { $0.toggleDrain("x86-01") } }
-        if demo { s.recordHistory = false; s.loadDemoHistory() }
+        if demo { s.recordHistory = false; s.memorySustain = 0; s.loadDemoHistory() }
         s.start(demoAction: action)
         if demo, args.contains("--welcome") { s.showWelcome = true }
         _store = State(initialValue: s)
