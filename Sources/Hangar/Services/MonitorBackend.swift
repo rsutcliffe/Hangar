@@ -113,21 +113,27 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
 
         let repos = Set(machines.flatMap { $0.snap.runners }.map { RepoRef(owner: $0.owner, repo: $0.repo) })
         let github = self.github
-        let (runners, jobs) = try await withThrowingTaskGroup(of: ([GHRunner], [GHJob]).self) { group in
+        // One repo the token cannot see is a warning for that repo; it must not stop every other card updating.
+        let (runners, jobs, repoWarnings) = try await withThrowingTaskGroup(of: ([GHRunner], [GHJob], String?).self) { group in
             for r in repos {
                 group.addTask {
-                    async let rs = github.runners(owner: r.owner, repo: r.repo, token: token)
-                    async let js = github.jobs(owner: r.owner, repo: r.repo, token: token)
-                    let (runners, jobs) = try await (rs, js)
-                    return (runners.map { var x = $0; x.repo = r.repo; return x }, jobs)
+                    do {
+                        async let rs = github.runners(owner: r.owner, repo: r.repo, token: token)
+                        async let js = github.jobs(owner: r.owner, repo: r.repo, token: token)
+                        let (runners, jobs) = try await (rs, js)
+                        return (runners.map { var x = $0; x.repo = r.repo; return x }, jobs, nil)
+                    } catch {
+                        guard let w = Self.repoWarning(repo: r.repo, error: error) else { throw error }
+                        return ([], [], w)
+                    }
                 }
             }
-            var allR: [GHRunner] = [], allJ: [GHJob] = []
-            for try await (rs, js) in group { allR += rs; allJ += js }
-            return (allR, allJ)
+            var allR: [GHRunner] = [], allJ: [GHJob] = [], allW: [String] = []
+            for try await (rs, js, w) in group { allR += rs; allJ += js; if let w { allW.append(w) } }
+            return (allR, allJ, allW)
         }
         var snap = Self.assemble(machines: machines, runners: runners, jobs: jobs, now: Date())
-        snap.warnings = warnings.sorted()
+        snap.warnings = (warnings + repoWarnings).sorted()
         snap.unreachable = unreachable.sorted()
         snap.tokenExpiry = await github.tokenExpiry()
         let rel = await github.latestRunnerRelease()
@@ -186,6 +192,13 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
     }
 
     struct RepoRef: Hashable, Sendable { var owner: String; var repo: String }
+
+    /// A warning for a repo the token cannot read (403 or 404); nil for any other error, which still fails the poll
+    /// (a bad token, a rate limit or a network failure affects every repo).
+    static func repoWarning(repo: String, error: Error) -> String? {
+        guard case GitHubError.http(let code) = error, code == 403 || code == 404 else { return nil }
+        return "\(repo): the token cannot read this repo (it needs Actions and Administration: read)"
+    }
 
     /// Pure join of the sources; unit-tested.
     static func assemble(machines: [Machine], runners: [GHRunner], jobs: [GHJob], now: Date) -> BackendSnapshot {

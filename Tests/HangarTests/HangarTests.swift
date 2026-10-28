@@ -1279,4 +1279,14 @@ final class UpdateCheckTests: XCTestCase {
         let notes = await s.runners.flatMap { $0.notes.map(\.text) }
         XCTAssertFalse(notes.contains { $0.hasPrefix("Mac memory") }, "\(notes)")
     }
+
+    func testARepoTheTokenCannotReadIsAWarningNotAFailedPoll() {
+        XCTAssertEqual(LiveBackend.repoWarning(repo: "BidProof", error: GitHubError.http(404)),
+                       "BidProof: the token cannot read this repo (it needs Actions and Administration: read)")
+        XCTAssertNotNil(LiveBackend.repoWarning(repo: "BidProof", error: GitHubError.http(403)))
+        XCTAssertNil(LiveBackend.repoWarning(repo: "BidProof", error: GitHubError.unauthorized))           // a bad token hits every repo
+        XCTAssertNil(LiveBackend.repoWarning(repo: "BidProof", error: GitHubError.rateLimited(until: nil)))
+        XCTAssertNil(LiveBackend.repoWarning(repo: "BidProof", error: GitHubError.http(500)))
+        XCTAssertNil(LiveBackend.repoWarning(repo: "BidProof", error: URLError(.notConnectedToInternet)))
+    }
 }
