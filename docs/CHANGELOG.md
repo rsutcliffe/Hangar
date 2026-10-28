@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.13 - 2026-10-28
+
+- A repository the GitHub token cannot read no longer freezes the whole window. Before, one such repository (for example a new product's repository that the token had not been given access to) made every poll fail, so every card stopped updating and showed a red "Repo not found or token cannot see it". Now it is a warning naming that repository ("the token cannot read this repo, it needs Actions and Administration: read"), and every other card keeps updating. A bad token, a rate limit or a network failure still stops the poll, because those affect every repository.
+
 ## 0.1.12 - 2026-10-23
 
 - "Mac memory pressure: high" now appears only once macOS has reported memory pressure for five minutes in a row. macOS flips between normal and warning often on a busy Mac, so the note used to flicker on and off. The notification and the optional "Protect running jobs" setting use the same rule. The swap-use note is unchanged.
