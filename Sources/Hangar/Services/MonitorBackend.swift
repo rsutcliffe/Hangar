@@ -91,7 +91,10 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                     }
                     let probe = reached ? await hosts.hostProbe(h) : (memory: nil, name: nil)
                     let label = h.isLocal ? "this Mac" : SnapshotParser.shortName(probe.name ?? (hostname.isEmpty ? (h.target ?? "") : hostname))
-                    out = out.map { var m = $0; m.label = label; m.hostMemory = probe.memory; return m }
+                    let committed = (vmsOrNil ?? [:]).values.filter(\.running).reduce(0) { $0 + $1.memoryGB }
+                    var hostMemory = probe.memory
+                    hostMemory?.vmCommittedGB = committed
+                    out = out.map { var m = $0; m.label = label; m.hostMemory = hostMemory; return m }
                     if reached, let t = h.target { self.lock.withLock { self.labels[t] = label } }
                     let down = reached ? nil : (h.target.flatMap { t in self.lock.withLock { self.labels[t] } } ?? h.target ?? "this Mac")
                     var warning: String?

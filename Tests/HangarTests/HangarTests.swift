@@ -1157,6 +1157,14 @@ final class UpdateCheckTests: XCTestCase {
         XCTAssertEqual(MemoryRule.warning(m(2, 0, 0))?.text, "Mac memory pressure: high")
         XCTAssertEqual(MemoryRule.warning(m(4, 0, 0))?.text, "Mac memory pressure: critical")
     }
+    func testOvercommitWarnsOnlyWhenVMsExceedMacRAM() {
+        func m(_ committed: Double) -> HostMemory { HostMemory(pressureLevel: 1, swapUsedMB: 0, swapTotalMB: 2048, ramGB: 16, vmCommittedGB: committed) }
+        XCTAssertNil(MemoryRule.overcommit(nil))
+        XCTAssertNil(MemoryRule.overcommit(m(0)))                                  // unknown
+        XCTAssertNil(MemoryRule.overcommit(m(16)))                                 // exactly the Mac's RAM
+        XCTAssertEqual(MemoryRule.overcommit(m(24))?.text, "VMs promised 24 GB on a 16 GB Mac")
+        XCTAssertNil(MemoryRule.warning(m(24)))                                    // not a "low on memory" notification
+    }
     func testMemoryNoteShowsOnOneRunnerPerHostWhateverTheProbeOrder() async {
         func obs(_ id: String) -> RunnerObservation {
             RunnerObservation(id: id, arch: .arm64, cpus: 2, memoryGB: 4, vmRunning: true, ghOnline: true, busy: false, host: "box",
