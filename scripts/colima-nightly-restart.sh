@@ -26,6 +26,8 @@ busy() { colima ssh -p "$1" -- pgrep -f '[R]unner.Worker' > /dev/null 2>&1; }
 
 failed=0
 for p in "${profiles[@]}"; do
+  # colima stop on a profile that does not exist succeeds ("not running"), and colima start would then create a new, empty VM.
+  if ! colima list 2>/dev/null | awk 'NR > 1 { print $1 }' | grep -qx "$p"; then log "$p: no such profile, skipped"; failed=1; continue; fi
   waited=0
   while busy "$p" && [ "$waited" -lt "$WAIT_MINUTES" ]; do
     [ "$waited" -eq 0 ] && log "$p: a job is running, waiting up to $WAIT_MINUTES minutes"
