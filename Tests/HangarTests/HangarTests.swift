@@ -94,13 +94,44 @@ final class GitHubParseTests: XCTestCase {
                 RunnerFacts(dir: "/Users/u/actions-runner", name: "mini-native", owner: "example-org", repo: "vault", listenerRunning: true, lastOutputAt: nil)],
                              hostname: "mac-mini.local", cpus: 10, memTotalGB: 16),
             native: true, host: HostSpec("192.0.2.10"), profile: nil)
-        let snap = LiveBackend.assemble(machines: [vm, nat], runners: [GHRunner(name: "m4-web-ci", online: true, busy: true, labels: []),
-                                                                        GHRunner(name: "mini-native", online: true, busy: false, labels: [])],
+        let snap = LiveBackend.assemble(machines: [vm, nat], runners: [GHRunner(name: "m4-web-ci", online: true, busy: true, labels: [], repo: "gadgets"),
+                                                                        GHRunner(name: "mini-native", online: true, busy: false, labels: [], repo: "vault")],
                                         jobs: [job], now: now)
         XCTAssertEqual(snap.runners.map(\.id), ["m4-web-ci", "mini-native"])
         XCTAssertEqual(snap.runners[0].job?.id, 1); XCTAssertEqual(snap.runners[0].cpus, 6)
         XCTAssertFalse(snap.runners[0].standby)
         XCTAssertEqual(snap.runners[1].cpus, 10); XCTAssertEqual(snap.runners[1].memoryGB, 16, accuracy: 0.001); XCTAssertTrue(snap.runners[1].native)
+    }
+    func testLastRanComesFromTheWorkerLogWhenIdle() {
+        let now = Date(), ended = now.addingTimeInterval(-90)
+        func machine(_ lastOutput: Date?) -> LiveBackend.Machine {
+            LiveBackend.Machine(label: "mini", info: VMInfo(running: true, arch: .arm64, cpus: 2, memoryGB: 4),
+                snap: VMSnapshot(cpuPercent: 0, memUsedGB: 1, runners: [
+                    RunnerFacts(dir: "/h/a", name: "r1", owner: "o", repo: "gadgets", listenerRunning: true, lastOutputAt: lastOutput)]),
+                native: false, host: HostSpec("192.0.2.10"), profile: "default")
+        }
+        let gh = [GHRunner(name: "r1", online: true, busy: false, labels: [], repo: "gadgets")]
+        XCTAssertEqual(LiveBackend.assemble(machines: [machine(ended)], runners: gh, jobs: [], now: now).runners[0].lastJobEndedAt, ended,
+                       "a job shorter than a poll still counts")
+        XCTAssertNil(LiveBackend.assemble(machines: [machine(nil)], runners: gh, jobs: [], now: now).runners[0].lastJobEndedAt)
+        let running = GHJob(id: 1, runId: 9, repo: "gadgets", workflow: "build", runNumber: 1, branch: "main", status: "in_progress", conclusion: nil,
+                            labels: [], runnerName: "r1", createdAt: now, startedAt: now, completedAt: nil, steps: [])
+        XCTAssertNil(LiveBackend.assemble(machines: [machine(ended)], runners: gh, jobs: [running], now: now).runners[0].lastJobEndedAt,
+                     "while a job runs the log time is mid-job, not an end")
+    }
+    func testRunnersWithTheSameNameInTwoReposStayApart() {
+        let now = Date()
+        func facts(_ repo: String) -> RunnerFacts { RunnerFacts(dir: "/h/\(repo)", name: "mini", owner: "o", repo: repo, listenerRunning: true, lastOutputAt: nil) }
+        let m = LiveBackend.Machine(label: "mini", info: VMInfo(running: true, arch: .arm64, cpus: 2, memoryGB: 4),
+            snap: VMSnapshot(cpuPercent: 0, memUsedGB: 1, runners: [facts("alpha"), facts("beta")]),
+            native: false, host: HostSpec("192.0.2.10"), profile: "default")
+        let gh = [GHRunner(name: "mini", online: true, busy: true, labels: [], repo: "alpha"),
+                  GHRunner(name: "mini", online: false, busy: false, labels: [], repo: "beta")]
+        let snap = LiveBackend.assemble(machines: [m], runners: gh, jobs: [], now: now)
+        XCTAssertEqual(snap.runners.map(\.id), ["mini (alpha)", "mini (beta)"])
+        XCTAssertEqual(snap.runners.map(\.busy), [true, false])
+        XCTAssertEqual(snap.runners.map(\.ghOnline), [true, false])
+        XCTAssertEqual(LiveBackend.runnerID(facts("alpha"), duplicates: []), "mini", "a unique name is left as it is")
     }
 }
 
@@ -831,6 +862,7 @@ final class GitHubClientTests: XCTestCase {
             body: #"{"total_count":2,"runners":[{"name":"runner-a","status":"online","busy":true,"labels":[{"name":"self-hosted"},{"name":"ARM64"}]},{"name":"runner-b","status":"offline","busy":false,"labels":[{"name":"self-hosted"},{"name":"macbook-standby"}]}]}"#)
         StubURLProtocol.replies["/repos/example-org/widgets/actions/runs?per_page=20"] = .init(
             body: #"{"workflow_runs":[{"id":7,"name":"CI","run_number":12,"head_branch":"main","status":"in_progress","updated_at":"2026-10-14T10:00:00Z"},{"id":6,"name":"CI","run_number":11,"head_branch":"main","status":"completed","conclusion":"success","updated_at":"2026-10-14T09:00:00Z"}]}"#)
+        StubURLProtocol.replies["/repos/example-org/widgets/actions/runs?status=queued&per_page=100"] = .init(body: #"{"workflow_runs":[]}"#)
         StubURLProtocol.replies["/repos/example-org/widgets/actions/runs/7/jobs?per_page=100"] = .init(
             body: #"{"jobs":[{"id":70,"name":"unit","status":"in_progress","labels":["self-hosted","ARM64"],"runner_name":"runner-a","created_at":"2026-10-14T09:50:00Z","started_at":"2026-10-14T09:51:00Z","html_url":"https://github.com/example-org/widgets/actions/runs/7/job/70","steps":[{"number":1,"name":"Checkout","status":"completed","conclusion":"success"},{"number":2,"name":"Test","status":"in_progress"}]}]}"#)
         let gh = GitHubService(session: StubURLProtocol.session())
@@ -876,7 +908,7 @@ final class GitHubClientTests: XCTestCase {
     func testLatestRunnerVersionIsCachedAndSendsNoToken() async {
         StubURLProtocol.replies["/repos/actions/runner/releases/latest"] = .init(body: #"{"tag_name":"v2.338.0","published_at":"2026-10-06T13:55:11Z"}"#)
         let gh = GitHubService(session: StubURLProtocol.session())
-        let a = await gh.latestRunnerVersion(), b = await gh.latestRunnerVersion()
+        let a = await gh.latestRunnerRelease()?.version, b = await gh.latestRunnerRelease()?.version
         XCTAssertEqual(a, "2.338.0"); XCTAssertEqual(b, "2.338.0")
         let rel = await gh.latestRunnerRelease()
         XCTAssertEqual(rel?.published, ISO8601DateFormatter().date(from: "2026-10-06T13:55:11Z"))
@@ -886,8 +918,39 @@ final class GitHubClientTests: XCTestCase {
 
     func testAnUnreadableLatestVersionIsIgnored() async {
         StubURLProtocol.replies["/repos/actions/runner/releases/latest"] = .init(body: #"{"tag_name":"nightly"}"#)
-        let v = await GitHubService(session: StubURLProtocol.session()).latestRunnerVersion()
+        let v = await GitHubService(session: StubURLProtocol.session()).latestRunnerRelease()
         XCTAssertNil(v)
+    }
+
+    private func runsBody(_ runs: [(id: Int, updated: String)]) -> String {
+        let items = runs.map { #"{"id":\#($0.id),"name":"CI","run_number":\#($0.id),"head_branch":"b","status":"queued","updated_at":"\#($0.updated)"}"# }
+        return #"{"workflow_runs":[\#(items.joined(separator: ","))]}"#
+    }
+
+    func testAQueuedRunIsReadOnceUntilItChanges() async throws {
+        let base = "/repos/example-org/widgets/actions/runs"
+        StubURLProtocol.replies[base + "?per_page=20"] = .init(body: runsBody([(9, "2026-10-14T10:00:00Z")]))
+        StubURLProtocol.replies[base + "?status=queued&per_page=100"] = .init(body: runsBody([(9, "2026-10-14T10:00:00Z")]))
+        StubURLProtocol.replies[base + "/9/jobs?per_page=100"] = .init(body: #"{"jobs":[]}"#)       // queued by GitHub with no jobs
+        let gh = GitHubService(session: StubURLProtocol.session())
+        func jobCalls() -> Int { StubURLProtocol.seen.filter { $0.url!.path.hasSuffix("/9/jobs") }.count }
+        _ = try await gh.jobs(owner: "example-org", repo: "widgets", token: "t")
+        _ = try await gh.jobs(owner: "example-org", repo: "widgets", token: "t")
+        XCTAssertEqual(jobCalls(), 1, "an unchanged queued run is not asked for again")
+        StubURLProtocol.replies[base + "?per_page=20"] = .init(body: runsBody([(9, "2026-10-14T10:05:00Z")]))
+        StubURLProtocol.replies[base + "?status=queued&per_page=100"] = .init(body: runsBody([(9, "2026-10-14T10:05:00Z")]))
+        _ = try await gh.jobs(owner: "example-org", repo: "widgets", token: "t")
+        XCTAssertEqual(jobCalls(), 2, "a changed run is read again")
+    }
+
+    func testAnOldQueuedRunOutsideTheNewestTwentyIsStillSeen() async throws {
+        let base = "/repos/example-org/widgets/actions/runs"
+        StubURLProtocol.replies[base + "?per_page=20"] = .init(body: #"{"workflow_runs":[]}"#)
+        StubURLProtocol.replies[base + "?status=queued&per_page=100"] = .init(body: runsBody([(3, "2026-10-14T08:00:00Z")]))
+        StubURLProtocol.replies[base + "/3/jobs?per_page=100"] = .init(
+            body: #"{"jobs":[{"id":30,"name":"unit","status":"queued","labels":["self-hosted"],"created_at":"2026-10-14T08:00:00Z"}]}"#)
+        let jobs = try await GitHubService(session: StubURLProtocol.session()).jobs(owner: "example-org", repo: "widgets", token: "t")
+        XCTAssertEqual(jobs.map(\.id), [30])
     }
 }
 
