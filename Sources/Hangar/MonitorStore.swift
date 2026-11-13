@@ -37,6 +37,8 @@ final class MonitorStore {
     private var failedRestarts: Set<String> = []
     private var jobHistory = JobHistory.load()
     private(set) var failures = FailureLog.load()
+    private var savedJobHistory: JobHistory?
+    private var savedFailures: FailureLog?
     private var latestRunner: String?
     private var noticesSent: Set<String> = []
     private var pressureSince: [String: Date] = [:]        // host -> when its memory warning began (cleared when it ends)
@@ -207,7 +209,10 @@ final class MonitorStore {
                                queueLength: queue.count, longestWait: longest)
             if Int(now.timeIntervalSince1970) / 60 % 5 == 0 || utilisation.hours.count <= 1 { utilisation.save() }
         }
-        if recordHistory { jobHistory.save(); failures.save() }
+        if recordHistory {                                       // written when they change, not on every poll
+            if savedJobHistory != jobHistory { jobHistory.save(); savedJobHistory = jobHistory }
+            if savedFailures != failures { failures.save(); savedFailures = failures }
+        }
         for r in out { lastSeen[r.id] = now }
         out += HostRetention.carryOver(previous: runners, current: out, unreachable: Set(snap.unreachable), lastSeen: lastSeen)
         runners = out

@@ -26,7 +26,8 @@ enum Shell {
                 p.standardInput = stdin == nil ? FileHandle.nullDevice : inPipe
                 do { try p.run() } catch { cont.resume(throwing: ShellError.notFound(path)); return }
                 if let stdin {
-                    inPipe.fileHandleForWriting.write(Data(stdin.utf8))
+                    // write(contentsOf:) throws on a broken pipe; the older write(_:) raises an exception that Swift cannot catch.
+                    try? inPipe.fileHandleForWriting.write(contentsOf: Data(stdin.utf8))
                     try? inPipe.fileHandleForWriting.close()
                 }
                 let timedOutFlag = Flag()
