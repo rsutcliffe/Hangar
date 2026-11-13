@@ -67,31 +67,27 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                     var hostname = ""
                     var reached = false
                     var why = ""
-                    func note(_ e: Error) {
-                        if case ShellError.failed(_, let m) = e { why = m.split(separator: "\n").last.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? "" }
-                        else if case ShellError.timedOut = e { why = "timed out" }
-                        else if case ShellError.notFound(let p) = e { why = "\(p) not found" }
-                    }
                     var vmsOrNil: [String: VMInfo]?
-                    do { vmsOrNil = try await hosts.listVMs(h) } catch { note(error) }
+                    do { vmsOrNil = try await hosts.listVMs(h) } catch { why = Self.reason(error, fallback: "") }
                     if let vms = vmsOrNil {
                         reached = true
-                        for p in config.profiles where vms[p]?.running == true {
-                            if let snap = try? await hosts.vmSnapshot(h, profile: p) {
-                                hostname = snap.hostname
-                                out.append(Machine(label: "", info: vms[p], snap: snap, native: false, host: h, profile: p))
-                            }
+                        for (p, snap) in await Self.vmSnapshots(hosts, h, vms: vms, profiles: config.profiles) {
+                            hostname = snap.hostname
+                            out.append(Machine(label: "", info: vms[p], snap: snap, native: false, host: h, profile: p))
                         }
                     }
                     var nativeOrNil: VMSnapshot?
-                    do { nativeOrNil = try await hosts.nativeSnapshot(h) } catch { if !reached { note(error) } }
+                    do { nativeOrNil = try await hosts.nativeSnapshot(h) } catch { if !reached { why = Self.reason(error, fallback: "") } }
                     if let snap = nativeOrNil {
                         reached = true; hostname = snap.hostname
                         out.append(Machine(label: "", info: nil, snap: snap, native: true, host: h, profile: nil))
                     }
                     let probe = reached ? await hosts.hostProbe(h) : (memory: nil, name: nil)
                     let label = h.isLocal ? "this Mac" : SnapshotParser.shortName(probe.name ?? (hostname.isEmpty ? (h.target ?? "") : hostname))
-                    out = out.map { var m = $0; m.label = label; m.hostMemory = probe.memory; return m }
+                    let committed = (vmsOrNil ?? [:]).values.filter(\.running).reduce(0) { $0 + $1.memoryGB }
+                    var hostMemory = probe.memory
+                    hostMemory?.vmCommittedGB = committed
+                    out = out.map { var m = $0; m.label = label; m.hostMemory = hostMemory; return m }
                     if reached, let t = h.target { self.lock.withLock { self.labels[t] = label } }
                     let down = reached ? nil : (h.target.flatMap { t in self.lock.withLock { self.labels[t] } } ?? h.target ?? "this Mac")
                     var warning: String?
@@ -108,7 +104,8 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         }
 
         var map: [String: Place] = [:]
-        for m in machines { for r in m.snap.runners { map[r.name] = Place(host: m.host, profile: m.profile, dir: r.dir) } }
+        let dup = Self.duplicateNames(machines)
+        for m in machines { for r in m.snap.runners { map[Self.runnerID(r, duplicates: dup)] = Place(host: m.host, profile: m.profile, dir: r.dir) } }
         lock.withLock { located = map }
 
         let repos = Set(machines.flatMap { $0.snap.runners }.map { RepoRef(owner: $0.owner, repo: $0.repo) })
@@ -168,8 +165,8 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
             var failure: String?
             do {
                 let vms = try await hosts.listVMs(h)
-                for p in config.profiles where vms[p]?.running == true {
-                    if let s = try? await hosts.vmSnapshot(h, profile: p) { count += s.runners.count; s.runners.forEach { repos.insert(RepoRef(owner: $0.owner, repo: $0.repo)) } }
+                for (_, s) in await Self.vmSnapshots(hosts, h, vms: vms, profiles: config.profiles) {
+                    count += s.runners.count; s.runners.forEach { repos.insert(RepoRef(owner: $0.owner, repo: $0.repo)) }
                 }
             } catch { failure = Self.reason(error) }
             if let s = try? await hosts.nativeSnapshot(h) { failure = nil; count += s.runners.count; s.runners.forEach { repos.insert(RepoRef(owner: $0.owner, repo: $0.repo)) } }
@@ -184,11 +181,30 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         return report
     }
 
-    private static func reason(_ e: Error) -> String {
-        if case ShellError.failed(_, let m) = e { return m.split(separator: "\n").last.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? "failed" }
+    private static func reason(_ e: Error, fallback: String = "failed") -> String {
+        if case ShellError.failed(_, let m) = e { return m.split(separator: "\n").last.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? fallback }
         if case ShellError.timedOut = e { return "timed out" }
         if case ShellError.notFound(let p) = e { return "\(p) not found" }
-        return "failed"
+        return fallback
+    }
+
+    /// The configured profiles that are running, each probed; a VM that does not answer is left out.
+    private static func vmSnapshots(_ hosts: HostService, _ h: HostSpec, vms: [String: VMInfo], profiles: [String]) async -> [(profile: String, snap: VMSnapshot)] {
+        var out: [(profile: String, snap: VMSnapshot)] = []
+        for p in profiles where vms[p]?.running == true {
+            if let s = try? await hosts.vmSnapshot(h, profile: p) { out.append((p, s)) }
+        }
+        return out
+    }
+
+    /// Names that two repos' runners share. Such a runner is shown, and found for Restart, with its repo after the name.
+    static func duplicateNames(_ machines: [Machine]) -> Set<String> {
+        let all = machines.flatMap { $0.snap.runners }
+        return Set(Dictionary(grouping: all, by: \.name).filter { Set($0.value.map(\.repo)).count > 1 }.keys)
+    }
+
+    static func runnerID(_ f: RunnerFacts, duplicates: Set<String>) -> String {
+        duplicates.contains(f.name) ? "\(f.name) (\(f.repo))" : f.name
     }
 
     struct RepoRef: Hashable, Sendable { var owner: String; var repo: String }
@@ -203,10 +219,11 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
     /// Pure join of the sources; unit-tested.
     static func assemble(machines: [Machine], runners: [GHRunner], jobs: [GHJob], now: Date) -> BackendSnapshot {
         var obs: [RunnerObservation] = []
+        let dup = duplicateNames(machines)
         for m in machines {
             for f in m.snap.runners {
-                let gh = runners.first { $0.name == f.name }
-                let mine = jobs.filter { gh != nil && $0.runnerName == f.name }
+                let gh = runners.first { $0.name == f.name && $0.repo == f.repo }
+                let mine = jobs.filter { gh != nil && $0.runnerName == f.name && $0.repo == f.repo }
                 var job: ActiveJob?
                 if let j = mine.first(where: { $0.status == "in_progress" }) {
                     job = activeJob(j, lastOutput: f.lastOutputAt)
@@ -214,12 +231,14 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                             .max(by: { ($0.completedAt ?? .distantPast) < ($1.completedAt ?? .distantPast) }) {
                     job = activeJob(j, lastOutput: j.completedAt)
                 }
-                obs.append(RunnerObservation(id: f.name, arch: m.info?.arch ?? .arm64,
+                obs.append(RunnerObservation(id: runnerID(f, duplicates: dup), arch: m.info?.arch ?? .arm64,
                                              cpus: m.snap.cpus ?? m.info?.cpus ?? 0, memoryGB: m.snap.memTotalGB ?? m.info?.memoryGB ?? 0,
                                              vmRunning: true, ghOnline: gh?.online ?? false,
                                              listenerRunning: f.listenerRunning, busy: gh?.busy ?? false,
                                              host: m.label, native: m.native, standby: gh?.isStandby ?? false,
-                                             job: job, cpuPercent: m.snap.cpuPercent, memUsedGB: m.snap.memUsedGB, lastJobEndedAt: nil,
+                                             job: job, cpuPercent: m.snap.cpuPercent, memUsedGB: m.snap.memUsedGB,
+                                             // Idle: the newest worker log was last written when the last job ended, even a job shorter than a poll.
+                                             lastJobEndedAt: job == nil ? f.lastOutputAt : nil,
                                              runnerCPU: f.runnerCPU, cpuSupported: f.cpuSeconds != nil,
                                              diskFreeKB: f.diskFreeKB, diskUsedPct: f.diskUsedPct, version: f.version, hostMemory: m.hostMemory))
             }

@@ -107,24 +107,39 @@ actor GitHubService {
         return (v, published)
     }
 
-    func latestRunnerVersion(now: Date = Date()) async -> String? { await latestRunnerRelease(now: now)?.version }
-
     /// Repo-level runners (needs Administration: read on the repo).
     func runners(owner: String, repo: String, token: String) async throws -> [GHRunner] {
         guard Config.isSafeName(owner), Config.isSafeName(repo) else { throw GitHubError.badURL }
         return Self.parseRunners(try await get("/repos/\(owner)/\(repo)/actions/runners?per_page=100", token: token))
     }
 
+    /// A queued run's jobs cannot change while the run's own `updated_at` stays the same, so they are read once. This also
+    /// stops a run that GitHub queued without creating any jobs from being asked for again on every poll. Per repo, so each
+    /// poll replaces that repo's entries and finished runs drop out.
+    private var queuedJobs: [String: [Int: (updated: Date, jobs: [GHJob])]] = [:]
+
     /// Recent runs for a repo, then the jobs for runs that matter (queued, running, recently failed).
     func jobs(owner: String, repo: String, token: String, now: Date = Date()) async throws -> [GHJob] {
         guard Config.isSafeName(owner), Config.isSafeName(repo) else { throw GitHubError.badURL }
-        let runsJSON = try await get("/repos/\(owner)/\(repo)/actions/runs?per_page=20", token: token)
-        let runs = Self.parseRuns(runsJSON)
+        let base = "/repos/\(owner)/\(repo)/actions/runs"
+        // The 20 newest runs hold what is running and what just failed. Queued runs are asked for on their own: a repo that
+        // pushes often moves an old queued run out of the newest 20 while it still waits.
+        // shortcut: a run still in progress that is older than the 20 newest runs is not seen; add status=in_progress if it happens.
+        var runs = Self.parseRuns(try await get(base + "?per_page=20", token: token))
+        let known = Set(runs.map(\.id))
+        runs += Self.parseRuns(try await get(base + "?status=queued&per_page=100", token: token)).filter { !known.contains($0.id) }
+        let cached = queuedJobs["\(owner)/\(repo)"] ?? [:]
+        var kept: [Int: (updated: Date, jobs: [GHJob])] = [:]
         var out: [GHJob] = []
         for run in runs where run.status != "completed" || (run.conclusion == "failure" && now.timeIntervalSince(run.updatedAt) < 600) {
-            let j = try await get("/repos/\(owner)/\(repo)/actions/runs/\(run.id)/jobs?per_page=100", token: token)
-            out += Self.parseJobs(j, repo: repo, run: run)
+            if run.status == "queued", run.updatedAt != .distantPast, let c = cached[run.id], c.updated == run.updatedAt {
+                kept[run.id] = c; out += c.jobs; continue
+            }
+            let jobs = Self.parseJobs(try await get(base + "/\(run.id)/jobs?per_page=100", token: token), repo: repo, run: run)
+            if run.status == "queued" { kept[run.id] = (run.updatedAt, jobs) }
+            out += jobs
         }
+        queuedJobs["\(owner)/\(repo)"] = kept
         return out
     }
 
