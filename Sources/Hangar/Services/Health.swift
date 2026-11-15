@@ -166,6 +166,8 @@ struct HostMemory: Equatable, Sendable {
     var swapUsedMB: Double
     var swapTotalMB: Double
     var ramGB: Double
+    /// Memory promised to the Colima VMs running on this Mac (sum of their configured sizes); 0 when unknown.
+    var vmCommittedGB: Double = 0
 
     /// `sysctl -n` output of the pressure level, vm.swapusage and hw.memsize, one per line.
     static func parse(_ out: String) -> HostMemory? {
@@ -214,6 +216,14 @@ enum MemoryRule {
         let pct = m.swapTotalMB > 0 ? Int((m.swapUsedMB / m.swapTotalMB * 100).rounded()) : 0
         if pct >= swapFullPct, m.swapUsedMB >= swapMinUsedMB { return ("Mac swap \(pct)% full", why) }
         return nil
+    }
+
+    /// A card line when the running VMs are allowed more memory than the Mac has. Advisory only: idle VMs use little, so
+    /// this is the cause to look at when pressure or swap appears, not a fault in itself (and never a notification).
+    static func overcommit(_ m: HostMemory?) -> (text: String, help: String)? {
+        guard let m, m.ramGB > 0, m.vmCommittedGB > m.ramGB else { return nil }
+        let text = String(format: "VMs promised %.0f GB on a %.0f GB Mac", m.vmCommittedGB, m.ramGB)
+        return (text, "The Colima VMs on this Mac are each allowed more memory than the Mac has in total. Busy jobs in several VMs at once push macOS into swap and slow every job. Lower the VMs' memory (colima stop, then colima start --memory N) or run fewer.")
     }
 }
 

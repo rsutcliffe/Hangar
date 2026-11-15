@@ -89,6 +89,7 @@ struct Runner: Identifiable, Equatable, Sendable {
         var n: [Note] = []
         if let d = DiskRule.warning(freeKB: diskFreeKB, usedPct: diskUsedPct, vm: diskIsVM) { n.append(Note(text: d, urgent: true)) }
         if let w = MemoryRule.warning(hostMemory) { n.append(Note(text: w.text, urgent: true, help: w.help)) }
+        else if let w = MemoryRule.overcommit(hostMemory) { n.append(Note(text: w.text, urgent: false, help: w.help)) }
         if let s = failStreak { n.append(Note(text: "Failed \(s) times in a row here", urgent: true)) }
         if let f = longRunFactor { n.append(Note(text: String(format: "Running %.1fx longer than usual", f), urgent: true)) }
         if let v = version, let l = latestVersion, VersionCheck.isBehind(current: v, latest: l) {

@@ -7,6 +7,10 @@ struct RunnerCard: View {
     var onRestart: () -> Void
     var onDrain: () -> Void
 
+    @State private var confirmRestart = false
+    /// Restarting a healthy running job ends it, so that case asks first. A stalled or failed job is what Restart is for.
+    private func restart() { if s == .running { confirmRestart = true } else { onRestart() } }
+
     private var s: RunnerState { runner.state }
     private var problem: Bool { s.isProblem || runner.restartFailed }
     private var accent: Color { problem ? Theme.problem : Theme.running }
@@ -65,11 +69,11 @@ struct RunnerCard: View {
                 let busy = s == .restarting || s == .unreachable
                 Group {
                     if problem {
-                        Button(action: onRestart) { Text("Restart").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.onProblem) }
+                        Button(action: restart) { Text("Restart").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.onProblem) }
                             .buttonStyle(.glassProminent).tint(Theme.problem)
                             .accessibilityLabel("Restart \(runner.id)")
                     } else {
-                        Button(action: onRestart) { Text("Restart").font(.system(size: 12)) }.buttonStyle(.glass)
+                        Button(action: restart) { Text("Restart").font(.system(size: 12)) }.buttonStyle(.glass)
                             .accessibilityLabel("Restart \(runner.id)")
                     }
                     Button(action: onDrain) { Text(runner.draining || s == .paused ? "Resume" : "Drain").font(.system(size: 12)) }
@@ -79,6 +83,9 @@ struct RunnerCard: View {
                 .disabled(busy).opacity(busy ? 0.45 : 1)
             }
             .buttonBorderShape(.capsule).controlSize(.small)
+            .confirmationDialog("End the job running on \(runner.id)?", isPresented: $confirmRestart, titleVisibility: .visible) {
+                Button("Restart and end the job", role: .destructive, action: onRestart)
+            } message: { Text("Restarting stops the runner, and GitHub fails the job it is running. Drain lets the job finish first.") }
         }
         .padding(.vertical, 18).padding(.horizontal, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)     // fill the row, so cards in a row match
