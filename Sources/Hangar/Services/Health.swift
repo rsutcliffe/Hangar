@@ -115,6 +115,9 @@ struct JobHistory: Codable, Equatable, Sendable {
 
     mutating func recordFailure(jobKey: String, runner: String) { streaks[Self.streakKey(runner: runner, jobKey: jobKey), default: 0] += 1 }
 
+    /// A success seen in GitHub's job list ends the streak without touching the learned durations, so repeating it every poll is harmless.
+    mutating func clearStreak(jobKey: String, runner: String) { streaks[Self.streakKey(runner: runner, jobKey: jobKey)] = nil }
+
     func median(jobKey: String) -> Double? {
         guard let d = durations[jobKey], d.count >= Self.minSamples else { return nil }
         let s = d.sorted()

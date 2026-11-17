@@ -240,10 +240,20 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                                              // Idle: the newest worker log was last written when the last job ended, even a job shorter than a poll.
                                              lastJobEndedAt: job == nil ? f.lastOutputAt : nil,
                                              runnerCPU: f.runnerCPU, cpuSupported: f.cpuSeconds != nil,
-                                             diskFreeKB: f.diskFreeKB, diskUsedPct: f.diskUsedPct, version: f.version, hostMemory: m.hostMemory))
+                                             diskFreeKB: f.diskFreeKB, diskUsedPct: f.diskUsedPct, version: f.version, hostMemory: m.hostMemory,
+                                             succeededKeys: succeededKeys(mine)))
             }
         }
         return BackendSnapshot(runners: obs, queue: queue(from: jobs, runners: runners))
+    }
+
+    /// The keys of jobs whose newest completed run on this runner succeeded. Only the newest counts: a success older than a failure
+    /// must not end that failure's streak.
+    static func succeededKeys(_ jobs: [GHJob]) -> [String] {
+        let done = jobs.filter { $0.completedAt != nil && $0.conclusion != nil }
+        let newest = Dictionary(grouping: done) { JobHistory.key(repo: $0.repo, workflow: $0.workflow, job: $0.name) }
+            .compactMapValues { $0.max { ($0.completedAt ?? .distantPast) < ($1.completedAt ?? .distantPast) } }
+        return newest.filter { $0.value.conclusion == "success" }.keys.sorted()
     }
 
     static func activeJob(_ j: GHJob, lastOutput: Date?) -> ActiveJob {

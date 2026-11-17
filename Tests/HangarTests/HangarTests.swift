@@ -1361,3 +1361,45 @@ final class UpdateCheckTests: XCTestCase {
         XCTAssertNil(LiveBackend.repoWarning(repo: "BidProof", error: URLError(.notConnectedToInternet)))
     }
 }
+
+/// A job shorter than a poll is never seen running, so its success has to come from GitHub's job list.
+final class ShortJobSuccessTests: XCTestCase {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let key = JobHistory.key(repo: "gadgets", workflow: "CI", job: "CI status")
+
+    func job(_ id: Int, _ conclusion: String, ago: TimeInterval, runner: String = "m4-web-ci") -> GHJob {
+        let done = now.addingTimeInterval(-ago)
+        return GHJob(id: id, runId: id, repo: "gadgets", workflow: "CI", runNumber: id, branch: "main", status: "completed", conclusion: conclusion,
+                     labels: ["self-hosted"], runnerName: runner, createdAt: done.addingTimeInterval(-5), startedAt: done.addingTimeInterval(-4),
+                     completedAt: done, steps: [], name: "CI status")
+    }
+
+    func succeededKeys(_ jobs: [GHJob]) -> [String] {
+        let vm = LiveBackend.Machine(label: "mac-mini", info: VMInfo(running: true, arch: .arm64, cpus: 6, memoryGB: 12),
+            snap: VMSnapshot(cpuPercent: 1, memUsedGB: 1, runners: [
+                RunnerFacts(dir: "/h/a", name: "m4-web-ci", owner: "example-org", repo: "gadgets", listenerRunning: true, lastOutputAt: now)]),
+            native: false, host: HostSpec("192.0.2.10"), profile: "default")
+        let gh = [GHRunner(name: "m4-web-ci", online: true, busy: false, labels: [], repo: "gadgets")]
+        return LiveBackend.assemble(machines: [vm], runners: gh, jobs: jobs, now: now).runners[0].succeededKeys
+    }
+
+    func testNewestCompletedJobSucceededGivesItsKey() {
+        XCTAssertEqual(succeededKeys([job(1, "failure", ago: 3000), job(2, "success", ago: 600)]), [key])
+    }
+    func testSuccessOlderThanAFailureDoesNotClear() {
+        XCTAssertEqual(succeededKeys([job(1, "success", ago: 3000), job(2, "failure", ago: 600)]), [])
+    }
+    func testRunningJobAndOtherRunnersAreIgnored() {
+        var running = job(3, "success", ago: 10); running.status = "in_progress"; running.conclusion = nil; running.completedAt = nil
+        XCTAssertEqual(succeededKeys([running]), [])
+        XCTAssertEqual(succeededKeys([job(4, "success", ago: 10, runner: "other-runner")]), [])
+    }
+    func testClearStreakIsPerRunnerAndKey() {
+        var h = JobHistory()
+        for _ in 0..<3 { h.recordFailure(jobKey: key, runner: "a"); h.recordFailure(jobKey: key, runner: "b") }
+        h.clearStreak(jobKey: key, runner: "a")
+        XCTAssertNil(h.streak(runner: "a")); XCTAssertEqual(h.streak(runner: "b"), 3)
+        h.clearStreak(jobKey: key, runner: "a")      // idempotent
+        XCTAssertNil(h.streak(runner: "a"))
+    }
+}
