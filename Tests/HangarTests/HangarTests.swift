@@ -1498,3 +1498,28 @@ final class OnDemandCardTests: XCTestCase {
         XCTAssertEqual(OnDemandCard.status(for: OnDemandRunner(name: "s-1795015470612973000", repo: "app", set: "s", busy: true, job: nil)), "Running a job")
     }
 }
+
+final class RepoMemoryTests: XCTestCase {
+    typealias Ref = LiveBackend.RepoRef
+
+    func testAStoppedVmDoesNotMakeItsReposDisappear() {
+        // The mini's runner VM is stopped when idle, so no runner folder names BidProof or HOCI; they must still be polled.
+        let found: Set<Ref> = [Ref(owner: "o", repo: "TenantShield")]
+        let merged = RepoMemory.merge(found: found, remembered: ["o/BidProof", "o/HOCI", "o/TenantShield"])
+        XCTAssertEqual(merged, [Ref(owner: "o", repo: "TenantShield"), Ref(owner: "o", repo: "BidProof"), Ref(owner: "o", repo: "HOCI")])
+    }
+
+    func testAFoundRepoIsRememberedForNextTime() {
+        let found: Set<Ref> = [Ref(owner: "o", repo: "b"), Ref(owner: "o", repo: "a")]
+        XCTAssertEqual(RepoMemory.encode(found), ["o/a", "o/b"], "sorted, so it does not churn between polls")
+    }
+
+    func testOnlyBoringNamesAreRememberedBecauseTheyEndUpInURLs() {
+        XCTAssertEqual(RepoMemory.parse("o/r-1_x.y"), Ref(owner: "o", repo: "r-1_x.y"))
+        for bad in ["", "noslash", "a/b/c", "/b", "a/", "a/b c", "a/../b", "a/b?x=1", "a/b;rm"] {
+            XCTAssertNil(RepoMemory.parse(bad), bad)
+        }
+        let merged = RepoMemory.merge(found: [], remembered: ["good/repo", "bad name/x", "also/bad;"])
+        XCTAssertEqual(merged, [Ref(owner: "good", repo: "repo")])
+    }
+}

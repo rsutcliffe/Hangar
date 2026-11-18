@@ -110,7 +110,10 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         for m in machines { for r in m.snap.runners { map[Self.runnerID(r, duplicates: dup)] = Place(host: m.host, profile: m.profile, dir: r.dir) } }
         lock.withLock { located = map }
 
-        let repos = Set(machines.flatMap { $0.snap.runners }.map { RepoRef(owner: $0.owner, repo: $0.repo) })
+        // Repos seen before still count when their runner VM is stopped (see RepoMemory).
+        let found = Set(machines.flatMap { $0.snap.runners }.map { RepoRef(owner: $0.owner, repo: $0.repo) })
+        let repos = RepoMemory.merge(found: found, remembered: UserDefaults.standard.stringArray(forKey: RepoMemory.key) ?? [])
+        UserDefaults.standard.set(RepoMemory.encode(repos), forKey: RepoMemory.key)
         let github = self.github
         // One repo the token cannot see is a warning for that repo; it must not stop every other card updating.
         let (runners, jobs, repoWarnings) = try await withThrowingTaskGroup(of: ([GHRunner], [GHJob], String?).self) { group in
