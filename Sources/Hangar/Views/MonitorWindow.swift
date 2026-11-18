@@ -49,6 +49,7 @@ struct MonitorWindow: View {
                             }
                         }
                     }
+                    if !store.onDemand.isEmpty { OnDemandCard(runners: store.onDemand, now: ctx.date) }
                     UpNextCard(queue: store.queue, now: ctx.date)
                     footer
                 }

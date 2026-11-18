@@ -125,8 +125,29 @@ struct QueuedJob: Identifiable, Equatable, Sendable {
     /// Job labels that no online runner of the repo has (empty if each label exists but not all on one runner).
     var missingLabels: [String] = []
     var url: URL? = nil
+    /// Waits for an on-demand runner: the orchestrator starts one when a slot is free, so no runner exists yet and none is "missing".
+    var onDemand = false
 
     var isStuck: Bool { eligible?.isEmpty == true }
+}
+
+/// A short-lived runner the orchestrator started for one job, named `<set>-<unix nanoseconds>`.
+struct OnDemandRunner: Identifiable, Equatable, Sendable {
+    var id: String { name }
+    var name: String
+    var repo: String
+    /// The scale set it belongs to: its name without the trailing number.
+    var set: String
+    var busy: Bool
+    var job: ActiveJob?
+
+    /// The set name when `name` ends in `-` and at least ten digits (the orchestrator's naming), else nil.
+    static func setName(of name: String) -> String? {
+        guard let dash = name.lastIndex(of: "-") else { return nil }
+        let set = String(name[..<dash]), digits = name[name.index(after: dash)...]
+        guard !set.isEmpty, digits.count >= 10, digits.allSatisfy(\.isNumber) else { return nil }
+        return set
+    }
 }
 
 enum GitHubLink {
@@ -145,6 +166,14 @@ enum QueueAnalysis {
         let need = Set(labels.map { $0.lowercased() })
         return runners.filter { $0.online && ($0.repo.isEmpty || $0.repo == repo) && need.isSubset(of: Set($0.labels.map { $0.lowercased() })) }
             .map(\.name).sorted()
+    }
+
+    /// A job for an orchestrator scale set: not for a GitHub-hosted runner and not an ordinary `self-hosted` job, so its only
+    /// labels are the set's name. Prefixes are those of GitHub's own runner labels.
+    static func isOnDemand(labels: [String]) -> Bool {
+        let l = labels.map { $0.lowercased() }
+        guard !l.isEmpty, !l.contains("self-hosted") else { return false }
+        return !l.allSatisfy { $0.hasPrefix("ubuntu-") || $0.hasPrefix("windows-") || $0.hasPrefix("macos-") }
     }
 
     static func missingLabels(labels: [String], repo: String, runners: [GHRunner]) -> [String] {

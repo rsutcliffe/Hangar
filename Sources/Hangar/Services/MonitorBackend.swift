@@ -3,6 +3,8 @@ import Foundation
 struct BackendSnapshot: Sendable {
     var runners: [RunnerObservation]
     var queue: [QueuedJob]
+    /// Live runners the orchestrator started for single jobs; they have no folder on any host, so they come from GitHub's list.
+    var onDemand: [OnDemandRunner] = []
     var warnings: [String] = []
     /// Labels of hosts that could not be reached this poll.
     var unreachable: [String] = []
@@ -244,7 +246,19 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                                              succeededKeys: succeededKeys(mine)))
             }
         }
-        return BackendSnapshot(runners: obs, queue: queue(from: jobs, runners: runners))
+        var snap = BackendSnapshot(runners: obs, queue: queue(from: jobs, runners: runners))
+        snap.onDemand = onDemandRunners(runners: runners, jobs: jobs, known: Set(machines.flatMap { $0.snap.runners }.map { "\($0.repo)/\($0.name)" }))
+        return snap
+    }
+
+    /// Online runners with an orchestrator name that no host folder explains. GitHub keeps dead ephemeral runners listed for a
+    /// while, so offline ones are left out.
+    static func onDemandRunners(runners: [GHRunner], jobs: [GHJob], known: Set<String>) -> [OnDemandRunner] {
+        runners.compactMap { r -> OnDemandRunner? in
+            guard r.online, !known.contains("\(r.repo)/\(r.name)"), let set = OnDemandRunner.setName(of: r.name) else { return nil }
+            let mine = jobs.first { $0.status == "in_progress" && $0.runnerName == r.name && $0.repo == r.repo }
+            return OnDemandRunner(name: r.name, repo: r.repo, set: set, busy: r.busy, job: mine.map { activeJob($0, lastOutput: nil) })
+        }.sorted { $0.name < $1.name }
     }
 
     /// The keys of jobs whose newest completed run on this runner succeeded. Only the newest counts: a success older than a failure
@@ -271,7 +285,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
 
     static func queue(from jobs: [GHJob], runners: [GHRunner]? = nil) -> [QueuedJob] {
         var seen = Set<Int>()
-        return jobs.filter { $0.status == "queued" && $0.labels.contains("self-hosted") && seen.insert($0.id).inserted }
+        return jobs.filter { $0.status == "queued" && ($0.labels.contains("self-hosted") || QueueAnalysis.isOnDemand(labels: $0.labels)) && seen.insert($0.id).inserted }
             .sorted { $0.createdAt < $1.createdAt }
             .map { j in
                 let l = j.labels.map { $0.lowercased() }
@@ -279,7 +293,8 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                 var q = QueuedJob(id: j.id, repo: j.repo, workflow: j.workflow, branch: j.branch,
                                   runNumber: j.runNumber, arch: arch, queuedAt: j.createdAt, job: j.name, labels: j.labels)
                 q.url = GitHubLink.safe(j.htmlURL)
-                if let runners {
+                q.onDemand = QueueAnalysis.isOnDemand(labels: j.labels)
+                if !q.onDemand, let runners {
                     q.eligible = QueueAnalysis.eligible(labels: j.labels, repo: j.repo, runners: runners)
                     if q.eligible?.isEmpty == true { q.missingLabels = QueueAnalysis.missingLabels(labels: j.labels, repo: j.repo, runners: runners) }
                 }

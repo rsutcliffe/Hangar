@@ -6,6 +6,7 @@ import Observation
 final class MonitorStore {
     private(set) var runners: [Runner] = []
     private(set) var queue: [QueuedJob] = []
+    private(set) var onDemand: [OnDemandRunner] = []
     private(set) var lastUpdated: Date?
     private(set) var errorMessage: String?
     private(set) var notificationsOff = false
@@ -131,6 +132,7 @@ final class MonitorStore {
             return o
         }
         queue = snap.queue.sorted { $0.queuedAt < $1.queuedAt }
+        onDemand = snap.onDemand
         throttle(snap, config: config, now: now)
         var out: [Runner] = []
         // Runners in one Colima VM share its root disk, so they report identical figures: say it once, on the first.
