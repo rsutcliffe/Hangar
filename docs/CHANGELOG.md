@@ -2,6 +2,11 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.15 - 2026-11-18
+
+- A runner on a long job now shows which job it is on. In 0.1.14 an on-demand runner, or any runner, whose job belonged to a run that GitHub had pushed out of its newest twenty showed only "Running a job", with no job name, step progress or time. Runs that are in progress are now fetched on their own, as queued runs already were.
+- The window no longer cuts off its bottom. With many runner cards it is taller than the screen and scrolls, but the scroll bar was hidden, so "On-demand runners", "Up next" and the footer were out of sight. The footer (update notice, Capacity, Settings) is now pinned below the scrolling area, the scroll bar shows, and "On-demand runners" and "Up next" come first, above the runner cards, so work in progress is the part that stays in view.
+
 ## 0.1.14 - 2026-11-18
 
 - On-demand runners now show. Runners that an orchestrator starts for a single job never had a card, and the jobs waiting for them were left out of "Up next", so Hangar read "Queue is empty" while a repository had a dozen runs waiting. Those waiting jobs are now listed with an "On demand" label and the note "Waiting for an on-demand runner", and they are never counted as stuck, because their runner does not exist until a slot is free. A new "On-demand runners" card lists each live one with the job it is running, or "Waiting for a job" when it is online but has none.
