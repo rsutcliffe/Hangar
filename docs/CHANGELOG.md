@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.16 - 2026-11-18
+
+- A repository no longer disappears from Hangar when its runners are in a stopped virtual machine. Hangar finds the repositories to read from the runner folders on each Mac, and a runner VM that has nothing to do can now be stopped, so a repository whose runners were all in it dropped out: its waiting jobs, its on-demand runners and its running jobs were no longer read, and the window said "Queue is empty" with work in progress. Hangar now remembers the repositories it has seen, between polls and between launches, and keeps reading them.
+
 ## 0.1.15 - 2026-11-18
 
 - A runner on a long job now shows which job it is on. In 0.1.14 an on-demand runner, or any runner, whose job belonged to a run that GitHub had pushed out of its newest twenty showed only "Running a job", with no job name, step progress or time. Runs that are in progress are now fetched on their own, as queued runs already were.
