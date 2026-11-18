@@ -57,7 +57,12 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
             q(3, "api-server", "Build", "fix/auth-timeout", 484, .arm64, 360, eligible: ["arm-01"]), q(4, "ios-app", "Unit tests", "main", 77, .x86, 30, eligible: [], missing: ["xcode-26"]),
             q(5, "web", "Lint", "main", 1192, .arm64, 20),
         ]
-        var snap = BackendSnapshot(runners: runners, queue: queue)
+        var onDemandQueued = QueuedJob(id: 6, repo: "web", workflow: "CI", branch: "feat/search", runNumber: 1193, arch: .arm64,
+                                       queuedAt: now.addingTimeInterval(-90), labels: ["web-stack"])
+        onDemandQueued.onDemand = true
+        var snap = BackendSnapshot(runners: runners, queue: queue + [onDemandQueued])
+        snap.onDemand = [OnDemandRunner(name: "web-stack-1795015470612973000", repo: "web", set: "web-stack", busy: true, job: a2),
+                         OnDemandRunner(name: "web-plain-1795015491425386000", repo: "web", set: "web-plain", busy: false, job: nil)]
         snap.latestRunner = "2.338.0"; snap.latestRunnerPublished = Date().addingTimeInterval(-20 * 86400)
         if scenario == .permission {
             // A Mac Mini that macOS has not yet been allowed to reach, and a newer release to download.

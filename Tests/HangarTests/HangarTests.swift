@@ -1403,3 +1403,80 @@ final class ShortJobSuccessTests: XCTestCase {
         XCTAssertNil(h.streak(runner: "a"))
     }
 }
+
+final class OnDemandTests: XCTestCase {
+    private func job(_ id: Int, _ labels: [String], status: String = "queued", runner: String? = nil, repo: String = "app") -> GHJob {
+        GHJob(id: id, runId: 1, repo: repo, workflow: "CI", runNumber: 7, branch: "main", status: status, conclusion: nil,
+              labels: labels, runnerName: runner, createdAt: Date(), startedAt: status == "in_progress" ? Date() : nil, completedAt: nil,
+              steps: [.init(number: 1, status: "in_progress", conclusion: nil)], name: "j\(id)")
+    }
+
+    func testIsOnDemandMeansASelfHostedSetNameNotAHostedLabel() {
+        XCTAssertTrue(QueueAnalysis.isOnDemand(labels: ["bidproof-stack"]))
+        XCTAssertFalse(QueueAnalysis.isOnDemand(labels: ["ubuntu-latest"]))
+        XCTAssertFalse(QueueAnalysis.isOnDemand(labels: ["macos-14", "ubuntu-24.04"]))
+        XCTAssertFalse(QueueAnalysis.isOnDemand(labels: ["self-hosted", "linux", "x"]), "an ordinary self-hosted job is not on demand")
+        XCTAssertFalse(QueueAnalysis.isOnDemand(labels: []))
+    }
+
+    func testAScaleSetJobIsQueuedOnDemandAndNeverStuck() {
+        let others = [GHRunner(name: "m4-a", online: true, busy: false, labels: ["self-hosted", "linux"], repo: "app")]
+        let q = LiveBackend.queue(from: [job(1, ["bidproof-stack"]), job(2, ["ubuntu-latest"]), job(3, ["self-hosted", "gpu"])], runners: others)
+        XCTAssertEqual(q.map(\.id), [1, 3], "the hosted-label job stays out, the scale-set job comes in")
+        XCTAssertTrue(q[0].onDemand)
+        XCTAssertNil(q[0].eligible, "no runner exists yet, so it is not 'no runner'")
+        XCTAssertFalse(q[0].isStuck)
+        XCTAssertFalse(q[1].onDemand)
+        XCTAssertTrue(q[1].isStuck, "an ordinary self-hosted job with no matching runner is still stuck")
+        XCTAssertEqual([q[0]].stuckCount, 0)
+    }
+
+    func testUpNextNoteForAnOnDemandJob() {
+        var j = QueuedJob(id: 1, repo: "app", workflow: "CI", branch: "main", runNumber: 1, arch: .arm64, queuedAt: Date(), labels: ["bidproof-stack"])
+        j.onDemand = true
+        XCTAssertEqual(UpNextCard.note(for: j)?.text, "Waiting for an on-demand runner")
+        XCTAssertEqual(UpNextCard.note(for: j)?.stuck, false)
+    }
+
+    func testSetNameNeedsTheOrchestratorsNumericSuffix() {
+        XCTAssertEqual(OnDemandRunner.setName(of: "bidproof-stack-1795015470612973000"), "bidproof-stack")
+        XCTAssertEqual(OnDemandRunner.setName(of: "certsvault-plain-1795013067968452000"), "certsvault-plain")
+        XCTAssertNil(OnDemandRunner.setName(of: "m4-bidproof-ci"))
+        XCTAssertNil(OnDemandRunner.setName(of: "mac-mini-m4"))
+        XCTAssertNil(OnDemandRunner.setName(of: "x-123"), "too short a number to be nanoseconds")
+        XCTAssertNil(OnDemandRunner.setName(of: "-1795015470612973000"), "no set name")
+    }
+
+    func testAssembleListsUnmatchedOnlineOnDemandRunnersWithTheirJob() {
+        let now = Date()
+        let persistent = LiveBackend.Machine(label: "mini", info: VMInfo(running: true, arch: .arm64, cpus: 4, memoryGB: 4),
+            snap: VMSnapshot(cpuPercent: 0, memUsedGB: 1, runners: [
+                RunnerFacts(dir: "/h/a", name: "m4-bidproof-ci", owner: "o", repo: "app", listenerRunning: true, lastOutputAt: nil)]),
+            native: false, host: HostSpec("192.0.2.10"), profile: "default")
+        let gh = [
+            GHRunner(name: "m4-bidproof-ci", online: true, busy: false, labels: [], repo: "app"),                       // persistent, matched
+            GHRunner(name: "bidproof-stack-1795015470612973000", online: true, busy: true, labels: [], repo: "app"),    // on demand, running
+            GHRunner(name: "bidproof-plain-1795015491425386000", online: true, busy: false, labels: [], repo: "app"),   // on demand, idle
+            GHRunner(name: "bidproof-plain-1795014019499339000", online: false, busy: false, labels: [], repo: "app"),  // dead, still listed
+            GHRunner(name: "imac-tenantsafe-ci", online: true, busy: false, labels: [], repo: "app"),                   // not an on-demand name
+        ]
+        let running = job(9, ["bidproof-stack"], status: "in_progress", runner: "bidproof-stack-1795015470612973000")
+        let snap = LiveBackend.assemble(machines: [persistent], runners: gh, jobs: [running], now: now)
+        XCTAssertEqual(snap.runners.map(\.id), ["m4-bidproof-ci"], "the persistent card is unchanged")
+        XCTAssertEqual(snap.onDemand.map(\.name), ["bidproof-plain-1795015491425386000", "bidproof-stack-1795015470612973000"])
+        XCTAssertEqual(snap.onDemand.map(\.set), ["bidproof-plain", "bidproof-stack"])
+        XCTAssertNil(snap.onDemand[0].job, "an online runner with no job is shown as waiting")
+        XCTAssertEqual(snap.onDemand[1].job?.id, 9)
+        XCTAssertTrue(snap.onDemand[1].busy)
+    }
+}
+
+final class OnDemandCardTests: XCTestCase {
+    func testStatusLineNamesTheJobOrSaysItIsWaiting() {
+        let job = ActiveJob(id: 1, repo: "app", workflow: "CI", runNumber: 7, branch: "main", totalSteps: 3, currentStep: 2,
+                            startedAt: Date(), lastOutputAt: Date())
+        XCTAssertEqual(OnDemandCard.status(for: OnDemandRunner(name: "s-1795015470612973000", repo: "app", set: "s", busy: true, job: job)), "CI · app #7 · main")
+        XCTAssertEqual(OnDemandCard.status(for: OnDemandRunner(name: "s-1795015470612973000", repo: "app", set: "s", busy: false, job: nil)), "Waiting for a job")
+        XCTAssertEqual(OnDemandCard.status(for: OnDemandRunner(name: "s-1795015470612973000", repo: "app", set: "s", busy: true, job: nil)), "Running a job")
+    }
+}

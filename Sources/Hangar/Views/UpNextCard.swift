@@ -6,6 +6,7 @@ struct UpNextCard: View {
 
     /// The extra line under a job when its runner situation is unusual.
     static func note(for j: QueuedJob) -> (text: String, stuck: Bool)? {
+        if j.onDemand { return ("Waiting for an on-demand runner", false) }
         guard let e = j.eligible else { return nil }
         if e.isEmpty {
             let what = j.missingLabels.isEmpty ? j.labels : j.missingLabels
@@ -38,8 +39,9 @@ struct UpNextCard: View {
                             }
                         } }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        Text(j.isStuck ? "No runner" : j.arch.label).font(.system(size: 10, weight: j.isStuck ? .semibold : .regular))
+                        Text(j.isStuck ? "No runner" : (j.onDemand ? "On demand" : j.arch.label)).font(.system(size: 10, weight: j.isStuck ? .semibold : .regular))
                             .foregroundStyle(j.isStuck ? Theme.onProblem : Theme.text)
+                            .lineLimit(1).minimumScaleFactor(0.8)
                             .padding(.vertical, 2).padding(.horizontal, 8)
                             .background(j.isStuck ? Theme.problem : Theme.pill, in: Capsule()).frame(width: 66)
                         Text(Format.duration(now.timeIntervalSince(j.queuedAt)))
