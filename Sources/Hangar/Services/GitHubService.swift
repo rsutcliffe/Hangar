@@ -122,12 +122,16 @@ actor GitHubService {
     func jobs(owner: String, repo: String, token: String, now: Date = Date()) async throws -> [GHJob] {
         guard Config.isSafeName(owner), Config.isSafeName(repo) else { throw GitHubError.badURL }
         let base = "/repos/\(owner)/\(repo)/actions/runs"
-        // The 20 newest runs hold what is running and what just failed. Queued runs are asked for on their own: a repo that
-        // pushes often moves an old queued run out of the newest 20 while it still waits.
-        // shortcut: a run still in progress that is older than the 20 newest runs is not seen; add status=in_progress if it happens.
+        // The 20 newest runs hold what is running and what just failed. Queued and in-progress runs are each asked for on their
+        // own: a repo that pushes often moves an old run out of the newest 20 while it still waits or runs (a half-hour browser
+        // suite did, and its runner showed "Running a job" with no job).
         var runs = Self.parseRuns(try await get(base + "?per_page=20", token: token))
-        let known = Set(runs.map(\.id))
-        runs += Self.parseRuns(try await get(base + "?status=queued&per_page=100", token: token)).filter { !known.contains($0.id) }
+        var known = Set(runs.map(\.id))
+        for status in ["queued", "in_progress"] {
+            let more = Self.parseRuns(try await get(base + "?status=\(status)&per_page=100", token: token)).filter { !known.contains($0.id) }
+            known.formUnion(more.map(\.id))
+            runs += more
+        }
         let cached = queuedJobs["\(owner)/\(repo)"] ?? [:]
         var kept: [Int: (updated: Date, jobs: [GHJob])] = [:]
         var out: [GHJob] = []

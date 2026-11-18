@@ -5,14 +5,21 @@ struct MonitorWindow: View {
     @Environment(\.scenePhase) private var phase
     @Environment(\.openWindow) private var openWindow
     @State private var contentHeight: CGFloat = 0
+    @State private var footerHeight: CGFloat = 0
 
     var body: some View {
-        // Scrolls only when the runners would not fit on screen; otherwise the window hugs its content.
+        // Scrolls only when the runners would not fit on screen; otherwise the window hugs its content. The footer (update
+        // notice, Capacity, Settings) sits below the scroll area so it is never scrolled out of reach.
+        VStack(spacing: 0) {
         ScrollView(.vertical) {
         TimelineView(.periodic(from: .now, by: 10)) { ctx in
             GlassEffectContainer(spacing: 10) {
                 VStack(spacing: 12) {
                     header(now: ctx.date)
+                    // What is running and waiting comes first: with many runner cards below, the window scrolls, and the work in
+                    // progress must not be the part that scrolls out of sight.
+                    if !store.onDemand.isEmpty { OnDemandCard(runners: store.onDemand, now: ctx.date) }
+                    UpNextCard(queue: store.queue, now: ctx.date)
                     // A Grid (not a lazy one) so the cards in a row share the tallest card's height.
                     Grid(horizontalSpacing: 10, verticalSpacing: 10) {
                         ForEach(Array(store.runners.chunked(into: 3).enumerated()), id: \.offset) { _, row in
@@ -49,18 +56,18 @@ struct MonitorWindow: View {
                             }
                         }
                     }
-                    if !store.onDemand.isEmpty { OnDemandCard(runners: store.onDemand, now: ctx.date) }
-                    UpNextCard(queue: store.queue, now: ctx.date)
-                    footer
                 }
                 .padding(.horizontal, 14).padding(.bottom, 14)
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
-        .scrollIndicators(.hidden)
+        .scrollIndicators(.automatic)
         .scrollBounceBehavior(.basedOnSize)
-        .frame(height: contentHeight > 0 ? min(contentHeight, maxContentHeight) : nil)
+        .frame(height: contentHeight > 0 ? min(contentHeight, max(200, maxContentHeight - footerHeight)) : nil)
+        footer.padding(.horizontal, 20).padding(.bottom, 14)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
+        }
         .foregroundStyle(Theme.text)
         .frame(width: 644)
         .background {
