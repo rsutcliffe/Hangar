@@ -1500,6 +1500,10 @@ final class OnDemandCardTests: XCTestCase {
 }
 
 final class RepoMemoryTests: XCTestCase {
+    func testWatchedRepoLinesSplitOnNewlinesAndCommas() {
+        XCTAssertEqual(RepoMemory.lines("o/a\n o/b , o/c\n\n"), ["o/a", "o/b", "o/c"])
+    }
+
     typealias Ref = LiveBackend.RepoRef
 
     func testAStoppedVmDoesNotMakeItsReposDisappear() {

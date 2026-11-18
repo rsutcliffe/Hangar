@@ -13,6 +13,11 @@ enum RepoMemory {
         return LiveBackend.RepoRef(owner: parts[0], repo: parts[1])
     }
 
+    /// The "Repositories to watch" setting: one owner/name per line (commas also split).
+    static func lines(_ text: String) -> [String] {
+        text.split(whereSeparator: { $0 == "\n" || $0 == "," }).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
     static func encode(_ repos: Set<LiveBackend.RepoRef>) -> [String] {
         repos.map { "\($0.owner)/\($0.repo)" }.sorted()
     }
