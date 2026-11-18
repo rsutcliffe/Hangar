@@ -2,6 +2,13 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.14 - 2026-11-18
+
+- On-demand runners now show. Runners that an orchestrator starts for a single job never had a card, and the jobs waiting for them were left out of "Up next", so Hangar read "Queue is empty" while a repository had a dozen runs waiting. Those waiting jobs are now listed with an "On demand" label and the note "Waiting for an on-demand runner", and they are never counted as stuck, because their runner does not exist until a slot is free. A new "On-demand runners" card lists each live one with the job it is running, or "Waiting for a job" when it is online but has none.
+- A failure streak now ends when GitHub's job list shows the newest run of that job succeeded. A job shorter than a poll was never seen running, so its success never reached the streak and "Failed 3 times in a row here" stayed up after the job was fixed.
+- A card now says when the virtual machines on its Mac are allowed more memory than the Mac has, so an over-committed Mac is visible before it runs short.
+- New script `scripts/colima-nightly-restart.sh` and its launch agent: restarts each running Colima profile once a night, waiting for any job, so a VM that has grown to its full size hands its memory back to macOS.
+
 ## 0.1.13 - 2026-10-28
 
 - A repository the GitHub token cannot read no longer freezes the whole window. Before, one such repository (for example a new product's repository that the token had not been given access to) made every poll fail, so every card stopped updating and showed a red "Repo not found or token cannot see it". Now it is a warning naming that repository ("the token cannot read this repo, it needs Actions and Administration: read"), and every other card keeps updating. A bad token, a rate limit or a network failure still stops the poll, because those affect every repository.
