@@ -863,6 +863,7 @@ final class GitHubClientTests: XCTestCase {
         StubURLProtocol.replies["/repos/example-org/widgets/actions/runs?per_page=20"] = .init(
             body: #"{"workflow_runs":[{"id":7,"name":"CI","run_number":12,"head_branch":"main","status":"in_progress","updated_at":"2026-10-14T10:00:00Z"},{"id":6,"name":"CI","run_number":11,"head_branch":"main","status":"completed","conclusion":"success","updated_at":"2026-10-14T09:00:00Z"}]}"#)
         StubURLProtocol.replies["/repos/example-org/widgets/actions/runs?status=queued&per_page=100"] = .init(body: #"{"workflow_runs":[]}"#)
+        StubURLProtocol.replies["/repos/example-org/widgets/actions/runs?status=in_progress&per_page=100"] = .init(body: #"{"workflow_runs":[]}"#)
         StubURLProtocol.replies["/repos/example-org/widgets/actions/runs/7/jobs?per_page=100"] = .init(
             body: #"{"jobs":[{"id":70,"name":"unit","status":"in_progress","labels":["self-hosted","ARM64"],"runner_name":"runner-a","created_at":"2026-10-14T09:50:00Z","started_at":"2026-10-14T09:51:00Z","html_url":"https://github.com/example-org/widgets/actions/runs/7/job/70","steps":[{"number":1,"name":"Checkout","status":"completed","conclusion":"success"},{"number":2,"name":"Test","status":"in_progress"}]}]}"#)
         let gh = GitHubService(session: StubURLProtocol.session())
@@ -931,6 +932,7 @@ final class GitHubClientTests: XCTestCase {
         let base = "/repos/example-org/widgets/actions/runs"
         StubURLProtocol.replies[base + "?per_page=20"] = .init(body: runsBody([(9, "2026-10-14T10:00:00Z")]))
         StubURLProtocol.replies[base + "?status=queued&per_page=100"] = .init(body: runsBody([(9, "2026-10-14T10:00:00Z")]))
+        StubURLProtocol.replies[base + "?status=in_progress&per_page=100"] = .init(body: #"{"workflow_runs":[]}"#)
         StubURLProtocol.replies[base + "/9/jobs?per_page=100"] = .init(body: #"{"jobs":[]}"#)       // queued by GitHub with no jobs
         let gh = GitHubService(session: StubURLProtocol.session())
         func jobCalls() -> Int { StubURLProtocol.seen.filter { $0.url!.path.hasSuffix("/9/jobs") }.count }
@@ -947,10 +949,26 @@ final class GitHubClientTests: XCTestCase {
         let base = "/repos/example-org/widgets/actions/runs"
         StubURLProtocol.replies[base + "?per_page=20"] = .init(body: #"{"workflow_runs":[]}"#)
         StubURLProtocol.replies[base + "?status=queued&per_page=100"] = .init(body: runsBody([(3, "2026-10-14T08:00:00Z")]))
+        StubURLProtocol.replies[base + "?status=in_progress&per_page=100"] = .init(body: #"{"workflow_runs":[]}"#)
         StubURLProtocol.replies[base + "/3/jobs?per_page=100"] = .init(
             body: #"{"jobs":[{"id":30,"name":"unit","status":"queued","labels":["self-hosted"],"created_at":"2026-10-14T08:00:00Z"}]}"#)
         let jobs = try await GitHubService(session: StubURLProtocol.session()).jobs(owner: "example-org", repo: "widgets", token: "t")
         XCTAssertEqual(jobs.map(\.id), [30])
+    }
+
+    /// A long-running job (a browser suite of half an hour) belongs to a run that a busy repo has pushed out of the newest twenty;
+    /// without its own request the runner shows "Running a job" with no job name or progress.
+    func testAnInProgressRunOutsideTheNewestTwentyIsStillSeen() async throws {
+        let base = "/repos/example-org/widgets/actions/runs"
+        StubURLProtocol.replies[base + "?per_page=20"] = .init(body: #"{"workflow_runs":[]}"#)
+        StubURLProtocol.replies[base + "?status=queued&per_page=100"] = .init(body: #"{"workflow_runs":[]}"#)
+        StubURLProtocol.replies[base + "?status=in_progress&per_page=100"] = .init(
+            body: #"{"workflow_runs":[{"id":7,"name":"Browser tests","run_number":154,"head_branch":"docs/x","status":"in_progress","updated_at":"2026-10-14T08:00:00Z"}]}"#)
+        StubURLProtocol.replies[base + "/7/jobs?per_page=100"] = .init(
+            body: #"{"jobs":[{"id":70,"name":"Playwright","status":"in_progress","labels":["bidproof-stack"],"runner_name":"bidproof-stack-1795015470612973000","created_at":"2026-10-14T08:00:00Z","started_at":"2026-10-14T08:01:00Z","steps":[{"number":1,"status":"completed","conclusion":"success"},{"number":2,"status":"in_progress"}]}]}"#)
+        let jobs = try await GitHubService(session: StubURLProtocol.session()).jobs(owner: "example-org", repo: "widgets", token: "t")
+        XCTAssertEqual(jobs.map(\.id), [70])
+        XCTAssertEqual(jobs.first?.runnerName, "bidproof-stack-1795015470612973000")
     }
 }
 
