@@ -4,6 +4,7 @@ struct SettingsView: View {
     var store: MonitorStore
     @AppStorage(Config.Key.profiles) private var profiles = "default"
     @AppStorage(Config.Key.hosts) private var hosts = "local"
+    @AppStorage(Config.Key.repos) private var repos = ""
     @AppStorage(Config.Key.stallMinutes) private var stallMinutes = 10
     @AppStorage(Config.Key.pollSeconds) private var pollSeconds = 15
     @State private var token = ""
@@ -33,6 +34,7 @@ struct SettingsView: View {
             }
             Section("Hosts") {
                 TextField("One per line: local, or an SSH target", text: $hosts, axis: .vertical).lineLimit(2...5)
+                TextField("Repositories to always watch, owner/name per line", text: $repos, axis: .vertical).lineLimit(2...5)
                 Text("SSH uses your existing key; Hangar never asks for a password.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Colima") {

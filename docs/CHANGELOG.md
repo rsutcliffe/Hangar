@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.17 - 2026-11-18
+
+- New setting, Repositories to always watch (Settings, under Hosts): one owner/name per line. Hangar reads the queue, running jobs and on-demand runners of these repositories whether or not a runner of theirs is currently visible, so a repository whose runner VM has been stopped since Hangar was first installed no longer shows "Queue is empty" with work in progress. 0.1.16 only remembered repositories it had already seen.
+
 ## 0.1.16 - 2026-11-18
 
 - A repository no longer disappears from Hangar when its runners are in a stopped virtual machine. Hangar finds the repositories to read from the runner folders on each Mac, and a runner VM that has nothing to do can now be stopped, so a repository whose runners were all in it dropped out: its waiting jobs, its on-demand runners and its running jobs were no longer read, and the window said "Queue is empty" with work in progress. Hangar now remembers the repositories it has seen, between polls and between launches, and keeps reading them.

@@ -5,6 +5,7 @@ struct Config: Equatable, Sendable {
     enum Key {
         static let profiles = "profiles"
         static let hosts = "hosts"
+        static let repos = "watchedRepos"
         static let quietEnabled = "quietEnabled"
         static let checkUpdates = "checkUpdates"
         static let protectJobs = "protectJobs"

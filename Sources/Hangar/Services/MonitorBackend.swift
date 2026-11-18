@@ -112,7 +112,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
 
         // Repos seen before still count when their runner VM is stopped (see RepoMemory).
         let found = Set(machines.flatMap { $0.snap.runners }.map { RepoRef(owner: $0.owner, repo: $0.repo) })
-        let repos = RepoMemory.merge(found: found, remembered: UserDefaults.standard.stringArray(forKey: RepoMemory.key) ?? [])
+        let repos = RepoMemory.merge(found: found, remembered: (UserDefaults.standard.stringArray(forKey: RepoMemory.key) ?? []) + RepoMemory.lines(UserDefaults.standard.string(forKey: Config.Key.repos) ?? ""))
         UserDefaults.standard.set(RepoMemory.encode(repos), forKey: RepoMemory.key)
         let github = self.github
         // One repo the token cannot see is a warning for that repo; it must not stop every other card updating.
