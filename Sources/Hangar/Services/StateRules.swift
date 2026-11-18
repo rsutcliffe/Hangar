@@ -25,6 +25,9 @@ struct RunnerObservation: Equatable, Sendable {
     var diskUsedPct: Int? = nil
     var version: String? = nil
     var hostMemory: HostMemory? = nil
+    /// Job keys whose newest completed job on this runner succeeded, from GitHub's job list. A job shorter than a poll is never seen
+    /// running, so this is the only way its success reaches the failure streak.
+    var succeededKeys: [String] = []
 }
 
 /// What the user has asked for, plus what the app has already acted on.

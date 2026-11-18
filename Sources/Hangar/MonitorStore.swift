@@ -179,6 +179,8 @@ final class MonitorStore {
             intents[o.id] = intent
 
             let shown = [.running, .stalled, .failed].contains(state) ? obs.job : nil
+            // A short job is never seen running, so GitHub's job list also ends a streak when the newest run succeeded.
+            for key in o.succeededKeys { jobHistory.clearStreak(jobKey: key, runner: o.id) }
             // A job that ended without failing teaches the usual duration and clears the failure streak.
             if let was = runners.first(where: { $0.id == o.id }), let prev = was.job, prev.id != shown?.id,
                prev.failedStep == nil, was.state == .running || was.state == .stalled {
