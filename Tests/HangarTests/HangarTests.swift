@@ -1487,6 +1487,22 @@ final class OnDemandTests: XCTestCase {
         XCTAssertEqual(snap.onDemand[1].job?.id, 9)
         XCTAssertTrue(snap.onDemand[1].busy)
     }
+
+    func testOnDemandRunnerTakesItsHostFromTheContainerMap() {
+        let gh = [GHRunner(name: "bidproof-stack-1795015470612973000", online: true, busy: true, labels: [], repo: "app"),
+                  GHRunner(name: "bidproof-plain-1795015491425386000", online: true, busy: false, labels: [], repo: "app")]
+        let out = LiveBackend.onDemandRunners(runners: gh, jobs: [], known: [], hostOf: ["bidproof-stack-1795015470612973000": "iMac"])
+        XCTAssertEqual(out.map(\.host), [nil, "iMac"], "a runner no host reported has no host, and is still listed")
+        XCTAssertEqual(LiveBackend.onDemandRunners(runners: gh, jobs: [], known: []).map(\.host), [nil, nil], "hostOf is optional")
+    }
+
+    func testDockerPsNamesKeepOnlyOrchestratorRunners() {
+        let out = "orch-runner-bidproof-stack-1795461842080849000 \nsupabase_db_bidproof\n\norch-runner-x-123\norch-runner-bidproof-plain-1795462134668047000\n"
+        XCTAssertEqual(SnapshotParser.onDemandNames(fromDockerPs: out),
+                       ["bidproof-stack-1795461842080849000", "bidproof-plain-1795462134668047000"],
+                       "other containers, blank lines and a name without the numeric suffix are dropped")
+        XCTAssertEqual(SnapshotParser.onDemandNames(fromDockerPs: ""), [])
+    }
 }
 
 final class OnDemandCardTests: XCTestCase {
