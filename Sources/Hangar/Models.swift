@@ -140,6 +140,8 @@ struct OnDemandRunner: Identifiable, Equatable, Sendable {
     var set: String
     var busy: Bool
     var job: ActiveJob?
+    /// The Mac whose orchestrator VM runs it ("iMac", "mac-mini"); nil when no host reported the container.
+    var host: String? = nil
 
     /// The set name when `name` ends in `-` and at least ten digits (the orchestrator's naming), else nil.
     static func setName(of name: String) -> String? {

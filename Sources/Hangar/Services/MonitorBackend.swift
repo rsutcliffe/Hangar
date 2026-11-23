@@ -61,8 +61,9 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         var machines: [Machine] = []
         var warnings: [String] = []
         var unreachable: [String] = []
+        var hostOf: [String: String] = [:]                  // on-demand runner name -> the Mac whose orchestrator VM runs it
         self.lock.withLock { self.permissionHint = false }
-        await withTaskGroup(of: ([Machine], String?, String?).self) { group in
+        await withTaskGroup(of: ([Machine], String?, String?, [String: String]).self) { group in
             for h in config.hosts.map(HostSpec.init) {
                 group.addTask {
                     var out: [Machine] = []
@@ -99,10 +100,16 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                         warning = p.message; perm = p.needsLocalNetwork
                     }
                     if perm { self.lock.withLock { self.permissionHint = true } }
-                    return (out, warning, down)
+                    // Only a running orchestrator VM can hold on-demand runners; skip the extra call otherwise.
+                    var here: [String: String] = [:]
+                    if vmsOrNil?["orchestrator"]?.running == true { for n in await hosts.onDemandNames(h) { here[n] = label } }
+                    return (out, warning, down, here)
                 }
             }
-            for await (m, w, down) in group { machines += m; if let w { warnings.append(w) }; if let down { unreachable.append(down) } }
+            for await (m, w, down, here) in group {
+                machines += m; if let w { warnings.append(w) }; if let down { unreachable.append(down) }
+                hostOf.merge(here) { a, _ in a }
+            }
         }
 
         var map: [String: Place] = [:]
@@ -134,7 +141,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
             for try await (rs, js, w) in group { allR += rs; allJ += js; if let w { allW.append(w) } }
             return (allR, allJ, allW)
         }
-        var snap = Self.assemble(machines: machines, runners: runners, jobs: jobs, now: Date())
+        var snap = Self.assemble(machines: machines, runners: runners, jobs: jobs, now: Date(), hostOf: hostOf)
         snap.warnings = (warnings + repoWarnings).sorted()
         snap.unreachable = unreachable.sorted()
         snap.tokenExpiry = await github.tokenExpiry()
@@ -222,7 +229,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
     }
 
     /// Pure join of the sources; unit-tested.
-    static func assemble(machines: [Machine], runners: [GHRunner], jobs: [GHJob], now: Date) -> BackendSnapshot {
+    static func assemble(machines: [Machine], runners: [GHRunner], jobs: [GHJob], now: Date, hostOf: [String: String] = [:]) -> BackendSnapshot {
         var obs: [RunnerObservation] = []
         let dup = duplicateNames(machines)
         for m in machines {
@@ -250,17 +257,17 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
             }
         }
         var snap = BackendSnapshot(runners: obs, queue: queue(from: jobs, runners: runners))
-        snap.onDemand = onDemandRunners(runners: runners, jobs: jobs, known: Set(machines.flatMap { $0.snap.runners }.map { "\($0.repo)/\($0.name)" }))
+        snap.onDemand = onDemandRunners(runners: runners, jobs: jobs, known: Set(machines.flatMap { $0.snap.runners }.map { "\($0.repo)/\($0.name)" }), hostOf: hostOf)
         return snap
     }
 
     /// Online runners with an orchestrator name that no host folder explains. GitHub keeps dead ephemeral runners listed for a
     /// while, so offline ones are left out.
-    static func onDemandRunners(runners: [GHRunner], jobs: [GHJob], known: Set<String>) -> [OnDemandRunner] {
+    static func onDemandRunners(runners: [GHRunner], jobs: [GHJob], known: Set<String>, hostOf: [String: String] = [:]) -> [OnDemandRunner] {
         runners.compactMap { r -> OnDemandRunner? in
             guard r.online, !known.contains("\(r.repo)/\(r.name)"), let set = OnDemandRunner.setName(of: r.name) else { return nil }
             let mine = jobs.first { $0.status == "in_progress" && $0.runnerName == r.name && $0.repo == r.repo }
-            return OnDemandRunner(name: r.name, repo: r.repo, set: set, busy: r.busy, job: mine.map { activeJob($0, lastOutput: nil) })
+            return OnDemandRunner(name: r.name, repo: r.repo, set: set, busy: r.busy, job: mine.map { activeJob($0, lastOutput: nil) }, host: hostOf[r.name])
         }.sorted { $0.name < $1.name }
     }
 

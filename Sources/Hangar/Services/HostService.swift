@@ -107,6 +107,18 @@ enum SnapshotParser {
         return (c[c.count - 2], c[c.count - 1])
     }
 
+    /// Runner names from `docker ps --format {{.Names}}` in a host's orchestrator VM: the orchestrator names each runner's
+    /// container `orch-runner-<runner name>`. Other containers and names without the numeric suffix are dropped.
+    static func onDemandNames(fromDockerPs out: String) -> [String] {
+        let prefix = "orch-runner-"
+        return out.split(separator: "\n").compactMap { line in
+            let s = line.trimmingCharacters(in: .whitespaces)
+            guard s.hasPrefix(prefix) else { return nil }
+            let name = String(s.dropFirst(prefix.count))
+            return OnDemandRunner.setName(of: name) == nil ? nil : name
+        }
+    }
+
     /// "mac-mini.local" -> "mac-mini".
     static func shortName(_ h: String) -> String { h.split(separator: ".").first.map(String.init) ?? h }
 }
@@ -213,6 +225,15 @@ actor HostService {
         if let t = host.target { out = try? await ssh(t, "sysctl -n " + keys.joined(separator: " "), timeout: 15) }
         else { out = try? await Shell.run("/usr/sbin/sysctl", ["-n"] + keys, timeout: 15) }
         return (out.flatMap(HostMemory.parse), out.flatMap(HostMemory.parseName))
+    }
+
+    /// Runner names running in the host's `orchestrator` Colima VM; empty on any failure (the host is then just not shown).
+    func onDemandNames(_ host: HostSpec) async -> [String] {
+        let cmd = "DOCKER_HOST=unix://$HOME/.colima/orchestrator/docker.sock docker ps --format '{{.Names}}'"
+        let out: String?
+        if let t = host.target { out = try? await ssh(t, Self.remotePath + cmd, timeout: 15) }
+        else { out = try? await Shell.run("/bin/sh", ["-c", "export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH; " + cmd], timeout: 15) }
+        return out.map(SnapshotParser.onDemandNames(fromDockerPs:)) ?? []
     }
 
     /// nil when the host has no native runner dirs.

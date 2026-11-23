@@ -23,7 +23,11 @@ struct OnDemandCard: View {
             ForEach(runners.prefix(6)) { r in
                 Divider().overlay(Theme.line)
                 HStack(spacing: 12) {
-                    Text(r.set).font(.system(size: 12, weight: .semibold)).lineLimit(1).frame(width: 130, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(r.set).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                        if let host = r.host { Text(host).font(.system(size: 10)).foregroundStyle(Theme.muted).lineLimit(1) }
+                    }
+                    .frame(width: 130, alignment: .leading)
                     JobLink(url: r.job?.url) {
                         Text(Self.status(for: r)).font(.system(size: 12)).foregroundStyle(r.job == nil ? Theme.muted : Theme.text)
                             .lineLimit(1).truncationMode(.tail)
