@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.18 - 2026-11-24
+
+- On-demand runners now show which Mac they are on. The "On-demand runners" card listed each runner by its set name only, and GitHub does not say where a runner runs, so with jobs spread over two Macs there was no way to tell. Hangar now reads the runner containers in each Mac's orchestrator virtual machine and shows the Mac's name under the set name, for example "iMac" or "mac-mini". A Mac that cannot be read, or whose orchestrator virtual machine is stopped, simply shows no name.
+
 ## 0.1.17 - 2026-11-18
 
 - New setting, Repositories to always watch (Settings, under Hosts): one owner/name per line. Hangar reads the queue, running jobs and on-demand runners of these repositories whether or not a runner of theirs is currently visible, so a repository whose runner VM has been stopped since Hangar was first installed no longer shows "Queue is empty" with work in progress. 0.1.16 only remembered repositories it had already seen.
