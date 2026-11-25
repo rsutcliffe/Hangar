@@ -1503,6 +1503,15 @@ final class OnDemandTests: XCTestCase {
                        "other containers, blank lines and a name without the numeric suffix are dropped")
         XCTAssertEqual(SnapshotParser.onDemandNames(fromDockerPs: ""), [])
     }
+
+    func testEveryRunningOrchestratorVmIsReadForOnDemandRunners() {
+        func vm(_ running: Bool) -> VMInfo { VMInfo(running: running, arch: .arm64, cpus: 4, memoryGB: 5) }
+        let vms = ["default": vm(true), "orchestrator": vm(true), "orchestrator2": vm(true), "orchestrator3": vm(false),
+                   "orchestrator-test": vm(true), "voiceover": vm(true)]
+        XCTAssertEqual(SnapshotParser.orchestratorProfiles(in: vms), ["orchestrator", "orchestrator2"],
+                       "a second Docker daemon counts; a stopped VM, another suffix and other profiles do not")
+        XCTAssertEqual(SnapshotParser.orchestratorProfiles(in: [:]), [])
+    }
 }
 
 final class OnDemandCardTests: XCTestCase {
