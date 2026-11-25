@@ -101,8 +101,11 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                     }
                     if perm { self.lock.withLock { self.permissionHint = true } }
                     // Only a running orchestrator VM can hold on-demand runners; skip the extra call otherwise.
+                    // A Mac with a second Docker daemon has `orchestrator2` as well.
                     var here: [String: String] = [:]
-                    if vmsOrNil?["orchestrator"]?.running == true { for n in await hosts.onDemandNames(h) { here[n] = label } }
+                    for p in SnapshotParser.orchestratorProfiles(in: vmsOrNil ?? [:]) {
+                        for n in await hosts.onDemandNames(h, profile: p) { here[n] = label }
+                    }
                     return (out, warning, down, here)
                 }
             }

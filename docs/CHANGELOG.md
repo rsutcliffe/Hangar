@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.19 - 2026-11-25
+
+- On-demand runners on a Mac with a second Docker daemon now show the Mac's name. A Mac can run its orchestrator in more than one Colima virtual machine (`orchestrator`, `orchestrator2`), and Hangar read only the first, so a runner in the second showed no Mac name. Hangar now reads every running `orchestrator` virtual machine on each Mac.
+
 ## 0.1.18 - 2026-11-24
 
 - On-demand runners now show which Mac they are on. The "On-demand runners" card listed each runner by its set name only, and GitHub does not say where a runner runs, so with jobs spread over two Macs there was no way to tell. Hangar now reads the runner containers in each Mac's orchestrator virtual machine and shows the Mac's name under the set name, for example "iMac" or "mac-mini". A Mac that cannot be read, or whose orchestrator virtual machine is stopped, simply shows no name.
