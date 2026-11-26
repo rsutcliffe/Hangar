@@ -2088,6 +2088,39 @@ final class ThroughputTests: XCTestCase {
         XCTAssertEqual(s.failures.map(\.detail), ["", "", "", ""])
     }
 
+    // With the heartbeat at 09:19, the tile's six hours start with the 03:20 bucket: 340 minutes before 09:00.
+    func testFailuresOlderThanSixHoursAreLeftOut() throws {
+        let s = try XCTUnwrap(summary([bucket(71, failed: 1), bucket(72, failed: 1)],
+                                      failures: [failure("days-old", run: 1, at: -3000), failure("just-outside", run: 2, at: -341),
+                                                 failure("at-the-edge", run: 3, at: -340), failure("recent", run: 4, at: 5),
+                                                 Failure(job: "no-time", runId: 5)]))
+        XCTAssertEqual(s.failed6h, 1)
+        XCTAssertEqual(s.failures.map(\.job), ["recent", "at-the-edge"])
+        XCTAssertEqual(s.failureTotal, 2)
+        // Five older runs must not fill the list or the count.
+        let many = try XCTUnwrap(summary([], failures: (1...19).map { failure("old-\($0)", run: $0, at: -1000 + $0) } + [failure("new", run: 50, at: 1)]))
+        XCTAssertEqual(many.failures.map(\.job), ["new"])
+        XCTAssertEqual(many.failureTotal, 1)
+    }
+
+    func testNoFailureInSixHours() throws {
+        let old = try XCTUnwrap(summary([bucket(0)], failures: [failure("old", run: 1, at: -3000)]))
+        XCTAssertEqual(old.failures, [])
+        XCTAssertEqual(old.failureTotal, 0, "the section stays, to say there were none in the six hours")
+        XCTAssertEqual(try XCTUnwrap(summary([], failures: [])).failureTotal, 0)
+        XCTAssertNil(try XCTUnwrap(summary([], failures: nil)).failureTotal, "no list in the file: nothing can be said")
+    }
+
+    func testRunStraddlingSixHours() throws {
+        let s = try XCTUnwrap(summary([], failures: [failure("before", run: 7, at: -345, fault: "memory_kill"), failure("other", run: 8, at: -300),
+                                                     failure("inside", run: 7, at: 2), failure("report", run: 7, at: 3)]))
+        XCTAssertEqual(s.failures.map(\.job), ["inside", "other"], "named, timed and ordered by its first job inside the six hours")
+        XCTAssertEqual(s.failures.first?.time, date("2026-11-26T09:02:00Z"))
+        XCTAssertEqual(s.failures.first?.more, 2, "every other failed job of the run that the file keeps, the older one too")
+        XCTAssertEqual(s.failures.first?.detail, "Out of memory (another job)")
+        XCTAssertEqual(s.failureTotal, 2)
+    }
+
     func testTileCountsRunsNotJobs() throws {
         // Three failed jobs of one run: the bucket counts the run once.
         let s = try XCTUnwrap(summary([bucket(1, completed: 3, failed: 1), bucket(0, completed: 1, failed: 0)],

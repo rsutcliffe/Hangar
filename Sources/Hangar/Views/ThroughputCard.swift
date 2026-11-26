@@ -23,7 +23,7 @@ struct ThroughputCard: View {
             chart("Runs failed, per 5 minutes", \.failed, .bars, Theme.problem)
             chart("Jobs running, peak per 5 minutes", \.running, .step, Theme.running)
             chart("Jobs waiting, peak per 5 minutes", \.waiting, .line, Theme.running, showsTimes: true)
-            if !summary.failures.isEmpty { failureList }
+            if let total = summary.failureTotal { failureList(of: total) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 14).padding(.horizontal, 16)
@@ -49,15 +49,19 @@ struct ThroughputCard: View {
                     showsTimes: showsTimes)
     }
 
-    private var failureList: some View {
+    private func failureList(of total: Int) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Divider().overlay(Theme.line).padding(.bottom, 4)
             HStack {
                 Text("Recent failures").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.muted)
                 Spacer()
-                Text("latest \(summary.failures.count) of \(summary.failureTotal)").font(.system(size: 11)).monospacedDigit()
-                    .foregroundStyle(Theme.muted)
+                if total > 0 {
+                    Text("latest \(summary.failures.count) of \(total)").font(.system(size: 11)).monospacedDigit()
+                        .foregroundStyle(Theme.muted)
+                        .help("The orchestrator keeps only its last 20 failed jobs, so this count can be below “Failed, 6 hours”")
+                }
             }
+            if total == 0 { Text("None in the last 6 hours").font(.system(size: 11)).foregroundStyle(Theme.muted) }
             ForEach(Array(summary.failures.enumerated()), id: \.offset) { _, entry in row(entry) }
         }
     }
@@ -144,7 +148,9 @@ private struct SeriesChart: View {
                     Color.clear.contentShape(Rectangle()).onContinuousHover { phase in
                         guard case .active(let at) = phase, let frame = proxy.plotFrame else { hovered = nil; return }
                         let plot = geometry[frame]
-                        hovered = (0..<plot.width).contains(at.x - plot.minX) ? proxy.value(atX: at.x - plot.minX, as: Date.self) : nil
+                        // Compared, not made into a Range, which traps on a negative or non-finite width.
+                        let x = at.x - plot.minX
+                        hovered = x >= 0 && x < plot.width ? proxy.value(atX: x, as: Date.self) : nil
                     }
                 }
             }

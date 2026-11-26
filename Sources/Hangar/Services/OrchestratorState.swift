@@ -228,9 +228,10 @@ extension OrchestratorState {
         var runningNow: Int?
         var waitingNow: Int?
         var typicalWait: String?
-        /// The latest runs, newest first.
+        /// The latest runs with a failure in the six hours, newest first.
         var failures: [Entry]
-        var failureTotal: Int
+        /// All such runs among the failed jobs the file keeps; nil when the file has no list.
+        var failureTotal: Int?
     }
 
     static let bucketLength: TimeInterval = 300
@@ -272,17 +273,18 @@ extension OrchestratorState {
             points.isEmpty ? nil : points.reduce(0) { $0 + $1[keyPath: value] }
         }
 
-        // The file lists failed jobs oldest first. One run's jobs make one entry, named by the earliest; run 0 is unknown.
-        var runs: [[Failure]] = []
-        var indexOfRun: [Int: Int] = [:]
-        for f in failures ?? [] {
-            let id = f.runId ?? 0
-            if id != 0, let i = indexOfRun[id] { runs[i].append(f); continue }
-            if id != 0 { indexOfRun[id] = runs.count }
-            runs.append([f])
+        // The file lists failed jobs oldest first, of any age. A run is listed when one of its jobs is in the tile's six hours,
+        // measured as the tile does: by the start of the job's bucket. It makes one entry, named by the earliest such job;
+        // "more" and the fault look at all its kept jobs, older ones too. Run 0 is unknown, so it never groups.
+        func inSpan(_ f: Failure) -> Bool {
+            f.time.map { within(Date(timeIntervalSince1970: ($0.timeIntervalSince1970 / length).rounded(.down) * length), 6 * 3600) } ?? false
         }
-        let entries = runs.reversed().prefix(5).map { jobs in
-            let first = jobs[0]
+        let all = failures ?? []
+        let jobsOfRun = Dictionary(grouping: all.filter { ($0.runId ?? 0) != 0 }) { $0.runId ?? 0 }
+        var listed = Set<Int>()
+        let runs = all.filter(inSpan).filter { f in (f.runId ?? 0) == 0 || listed.insert(f.runId ?? 0).inserted }
+        let entries = runs.reversed().prefix(5).map { first in
+            let jobs = jobsOfRun[first.runId ?? 0] ?? [first]
             var detail: [String] = []
             if let label = Self.faultLabel(first.fault) { detail.append(label) }
             else if let label = jobs.lazy.compactMap({ Self.faultLabel($0.fault) }).first { detail.append("\(label) (another job)") }
@@ -297,7 +299,7 @@ extension OrchestratorState {
                           doneLastHour: total(hour, \.completed), failed6h: total(points, \.failed),
                           runningNow: current?.running, waitingNow: current?.waiting,
                           typicalWait: OrchestratorCard.typicalWait(days: days) { $0 == OrchestratorCard.utcDay(now) },
-                          failures: Array(entries), failureTotal: runs.count)
+                          failures: Array(entries), failureTotal: failures == nil ? nil : runs.count)
     }
 
     /// The time and value of the bucket under the pointer.
