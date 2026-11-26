@@ -2259,6 +2259,13 @@ final class OrchestratorStateTests: XCTestCase {
                        "Typical wait today 0s")
     }
 
+    /// A closed day keeps no samples, so a p90 above zero is what shows its zero median was measured.
+    func testClosedDayWithZeroMedianStillCompares() {
+        let days = [OrchestratorState.Day(date: "2026-11-25", sets: ["a": .init(runs: 3, waitP50Sec: 0, waitP90Sec: 40)]),
+                    .init(date: "2026-11-26", sets: ["a": .init(runs: 2, waitP50Sec: 60, waitP90Sec: 70, waitSamplesSec: [50, 70])])]
+        XCTAssertEqual(OrchestratorCard.waitLine(days: days, now: date("2026-11-26T09:16:00Z")), "Typical wait today 1m, previous 7 days 0s")
+    }
+
     func testNoWaitHistoryShowsNoComparison() {
         let now = date("2026-11-26T09:16:00Z")
         let today = OrchestratorState.Day(date: "2026-11-26", sets: ["a": .init(runs: 2, waitP50Sec: 60)])

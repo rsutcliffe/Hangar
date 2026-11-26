@@ -73,7 +73,7 @@ struct OrchestratorCard: View {
             for set in (d.sets ?? [:]).values {
                 guard let n = set.runs, n > 0, let wait = set.waitP50Sec else { continue }
                 // The file writes zeros when it recorded no wait. Samples (today only) or a figure above zero show it did.
-                // shortcut: a closed day whose waits were all under a second is left out too; the file keeps no sample count.
+                // shortcut: a closed day whose recorded p90 was under a second is left out too; the file keeps no sample count.
                 guard set.waitSamplesSec?.isEmpty == false || wait > 0 || (set.waitP90Sec ?? 0) > 0 else { continue }
                 runs += Double(n); total += Double(n) * Double(wait)
             }
