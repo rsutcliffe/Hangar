@@ -1955,14 +1955,77 @@ final class OrchestratorStateTests: XCTestCase {
         // The probe worked and the state read did not.
         let h = held([("box-a", true), ("box-b", true)])
         XCTAssertNil(h.lost)
-        // The probe failed and the state read worked: unreached, as the app's host warnings have it.
+        // The probe failed and the state read worked: the file shows the Mac was reached.
         let now = date("2026-11-26T09:30:00Z")
         let readOnly = h.updated(with: [.init(target: "me@box-a", host: "box-a", text: Self.fixture(), reached: false),
                                         .init(target: "me@box-b", host: "box-b", text: nil, reached: true)], hosts: hosts, now: now)
         XCTAssertNotNil(readOnly.state)
-        XCTAssertEqual(readOnly.lost, cut)
-        var polls = Polls(state: quietState(heartbeat: now, age: 600), startedAt: now)
+        XCTAssertNil(readOnly.lost)
+        XCTAssertEqual(OrchestratorCard.sections(state: readOnly.state, seen: true, otherVersion: false, lost: readOnly.lost, now: now),
+                       [.notReporting("Last heartbeat 15m ago")])
+        var polls = Polls(state: readOnly.state, startedAt: now, lost: readOnly.lost)
         XCTAssertEqual(polls.keys(0, through: 1800), [300: ["orch|stale"]])
+        // Text that cannot be parsed was still read from the Mac.
+        let garbled = h.updated(with: [.init(target: "me@box-a", host: "box-a", text: "{", reached: false)], hosts: hosts, now: now)
+        XCTAssertNil(garbled.lost)
+        // For another Mac, "responded" still means its probe worked: a file read from it does not count.
+        let otherReadOnly = h.updated(with: [.init(target: "me@box-a", host: "box-a", text: nil, reached: false),
+                                             .init(target: "me@box-b", host: "box-b", text: "{", reached: false)], hosts: hosts, now: now)
+        XCTAssertEqual(otherReadOnly.lost, away)
+    }
+
+    /// A poll a minute, "cannot reach" on even minutes and `odd` on odd ones; the keys said, by time.
+    func alternate(_ polls: inout Polls, _ first: TimeInterval, through last: TimeInterval,
+                   odd: OrchestratorState.Lost? = nil) -> [TimeInterval: [String]] {
+        var said: [TimeInterval: [String]] = [:]
+        for t in stride(from: first, through: last, by: 60) {
+            polls.lost = Int(t / 60) % 2 == 0 ? cut : odd
+            let due = polls.at(t)
+            if !due.isEmpty { said[t] = due.map(\.key) }
+        }
+        return said
+    }
+
+    func testAlternatingSilenceIsStillAnnouncedOnce() {
+        let start = date("2026-11-26T09:16:00Z")
+        let stale = quietState(heartbeat: start, age: 600)
+        var polls = Polls(state: stale, startedAt: start)
+        XCTAssertEqual(alternate(&polls, 0, through: 3600), [900: ["orch|stale"]])
+        // With no remote Mac responding every other minute, neither measure gets anywhere.
+        var out = Polls(state: stale, startedAt: start)
+        XCTAssertEqual(alternate(&out, 0, through: 3600, odd: away), [:])
+        // Quiet hours hold it; it is said once when they end.
+        var quiet = Polls(state: stale, startedAt: start, quiet: true)
+        XCTAssertEqual(alternate(&quiet, 0, through: 1200), [:])
+        quiet.quiet = false
+        XCTAssertEqual(alternate(&quiet, 1260, through: 3600), [1260: ["orch|stale"]])
+    }
+
+    func testLongCountIsBrokenLikeTheShortOne() {
+        let start = date("2026-11-26T09:16:00Z")
+        let stale = quietState(heartbeat: start, age: 600)
+        // A gap longer than allowed starts it again.
+        var slept = Polls(state: stale, startedAt: start)
+        XCTAssertEqual(alternate(&slept, 0, through: 600), [:])
+        XCTAssertEqual(alternate(&slept, 1200, through: 3000), [2100: ["orch|stale"]])
+        // A failed poll leaves out only the time it falls in.
+        var failing = Polls(state: stale, startedAt: start)
+        XCTAssertEqual(alternate(&failing, 0, through: 600), [:])
+        failing.announcer.pollFailed()
+        XCTAssertEqual(alternate(&failing, 660, through: 1800), [960: ["orch|unreachable"]])
+        // One poll with no remote Mac responding starts it again.
+        var left = Polls(state: stale, startedAt: start)
+        XCTAssertEqual(alternate(&left, 0, through: 540), [:])
+        left.lost = away
+        XCTAssertEqual(left.at(600), [])
+        XCTAssertEqual(alternate(&left, 660, through: 2400), [1560: ["orch|unreachable"]])
+        // So does a current state.
+        var back = Polls(state: stale, startedAt: start)
+        XCTAssertEqual(alternate(&back, 0, through: 540), [:])
+        back.state = quietState(heartbeat: start.addingTimeInterval(600))
+        XCTAssertEqual(back.at(600), [])
+        back.state = stale
+        XCTAssertEqual(alternate(&back, 660, through: 2400), [1560: ["orch|unreachable"]])
     }
 
     func testLocalOrchestratorIsNeverCannotReach() {

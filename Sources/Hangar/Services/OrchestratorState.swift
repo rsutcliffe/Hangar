@@ -123,9 +123,12 @@ extension OrchestratorState {
         var target: String
         var host: String
         var text: String?
-        /// The host's probe worked this poll, which is what keeps it out of the unreachable warnings. The state read
-        /// above does not count either way.
+        /// The host's probe worked this poll, which is what keeps it out of the unreachable warnings.
         var reached = true
+
+        /// Something came back from the Mac, so the orchestrator's Mac is not one that cannot be reached. Another Mac
+        /// counts as responding only by its probe (`reached`).
+        var answered: Bool { reached || text != nil }
     }
 
     /// The orchestrator's Mac, a remote one, was not reached in the latest poll.
@@ -154,7 +157,7 @@ extension OrchestratorState {
             let own = next.target
             let parsed = reads.compactMap { read in read.text.flatMap(OrchestratorState.parse).map { (read: read, state: $0) } }
             let usable = parsed.filter { !$0.state.isAhead(now: now) }
-            let ownUnreached = reads.contains { $0.target == own && !$0.reached }
+            let ownUnreached = reads.contains { $0.target == own && !$0.answered }
             for (read, state) in usable.filter({ $0.read.target == own }) + usable.filter({ $0.read.target != own }) {
                 // While its own Mac is unreached, only a current file shows the orchestrator is on another one now.
                 if read.target != own, ownUnreached, state.isStale(now: now) { continue }
@@ -167,7 +170,7 @@ extension OrchestratorState {
             next.otherVersion = reads.contains { $0.text.map(OrchestratorState.isOtherVersion) ?? false }
             let supplier = reads.first { $0.target == next.target }
             next.lost = supplier.flatMap { s in
-                s.reached || HostSpec(s.target).isLocal ? nil
+                s.answered || HostSpec(s.target).isLocal ? nil
                     : Lost(mac: next.host ?? s.host, othersRespond: reads.contains { $0.reached && !HostSpec($0.target).isLocal })
             }
             return next
@@ -356,6 +359,9 @@ struct OrchestratorAnnouncer {
     private enum Silence { case notReporting, cannotReach }
     /// How long successful polls have seen the same silence, with nothing else in between.
     private var silentFor: TimeInterval = 0
+    /// The same count across both kinds of silence, so one that keeps changing kind is still announced.
+    private var unbrokenFor: TimeInterval = 0
+    private static let unbrokenAfter: TimeInterval = 900
     private var lastPoll: (at: Date, awake: TimeInterval, silence: Silence?)?
     private var failedSinceLastPoll = false
 
@@ -375,14 +381,20 @@ struct OrchestratorAnnouncer {
         let silent = !fresh && !otherVersion && (state != nil || seen)
         // With no remote Mac responding, this Mac is probably away from them all: nothing is counted or said.
         let silence: Silence? = !silent ? nil : lost.map { $0.othersRespond ? .cannotReach : nil } ?? .notReporting
-        if let last = lastPoll, silence != nil, last.silence == silence, now.timeIntervalSince(last.at) <= maxGap {
-            if !failedSinceLastPoll { silentFor += max(0, awake - last.awake) }
+        if let last = lastPoll, silence != nil, last.silence != nil, now.timeIntervalSince(last.at) <= maxGap {
+            let watched = failedSinceLastPoll ? 0 : max(0, awake - last.awake)
+            unbrokenFor += watched
+            silentFor = last.silence == silence ? silentFor + watched : 0
         } else {
+            unbrokenFor = 0
             silentFor = 0
         }
         lastPoll = (now, awake, silence)
         failedSinceLastPoll = false
-        let current = OrchestratorState.notices(state: state, silenceConfirmed: silence != nil && silentFor >= OrchestratorState.staleAfter,
+        // The longer measure is only for a spell in which neither silence notice has gone: it never adds a second.
+        let overdue = unbrokenFor >= Self.unbrokenAfter && sent.isDisjoint(with: ["orch|stale", "orch|unreachable"])
+        let current = OrchestratorState.notices(state: state,
+                                                silenceConfirmed: silence != nil && (silentFor >= OrchestratorState.staleAfter || overdue),
                                                 lost: lost, startedAt: startedAt, now: now)
         if fresh { sent.formIntersection(current.map(\.key)) }
         return quiet ? [] : current.filter { sent.insert($0.key).inserted }
