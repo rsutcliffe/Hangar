@@ -1699,3 +1699,93 @@ final class OnDemandFailureTests: XCTestCase {
     }
 }
 
+
+final class OrchestratorStateTests: XCTestCase {
+    /// state.json version 1 with every field the writer produces; all names are made up.
+    static func fixture(heartbeat: String = "2026-11-26T09:15:00Z") -> String {
+        """
+        {"version":1,"heartbeat":"\(heartbeat)",
+         "problems":[{"id":"host:box-a:reach","host":"box-a","class":"reach","text":"No answer over ssh","since":"2026-11-26T09:00:00Z"},
+           {"id":"nothing_running","host":"","class":"nothing_running","text":"Jobs wait and nothing runs","since":"2026-11-26T09:01:00Z"}],
+         "events":[{"time":"2026-11-26T09:10:00Z","kind":"memory_kill","host":"box-a","set":"widgets-stack","job":"e2e","text":"Killed for memory","attributed":true}],
+         "eventsTotal24h":12,
+         "recommendations":[{"id":"repeat_kill:widgets-stack","rule":"repeat_kill","text":"Give widgets-stack more memory"}],
+         "throughput":[{"start":"2026-11-26T09:05:00Z","completed":4,"failed":1,"running":2,"waiting":3},
+           {"start":"2026-11-26T09:10:00Z","completed":0,"failed":0,"running":1,"waiting":0}],
+         "failures":[{"time":"2026-11-26T09:10:00Z","set":"widgets-stack","repo":"widgets","job":"e2e","jobId":"a1b2c3","runner":"widgets-stack-1795015470612973000","runId":17000000001,"fault":"memory_kill"},
+           {"time":"2026-11-26T09:12:00Z","set":"widgets-plain","repo":"widgets","job":"lint","jobId":"d4e5f6","runner":"widgets-plain-1795015491425386000","runId":0,"fault":""}],
+         "days":[{"date":"2026-11-25","waitingSec":600,
+             "sets":{"widgets-stack":{"runs":9,"waitP50Sec":20,"waitP90Sec":95,"failed":1,"memoryKills":1}},
+             "hosts":{"box-a":{"refusedSec":{"pressure":120,"backpressure":30,"unknown":5},"noRoomSec":{"slots":300},"hungReleased":1,"failedStarts":2}}},
+           {"date":"2026-11-26","waitingSec":0,
+             "sets":{"widgets-stack":{"runs":2,"waitP50Sec":10,"waitP90Sec":12,"failed":0,"memoryKills":0,"waitSamplesSec":[10,12]}},
+             "hosts":{"box-a":{"refusedSec":{},"noRoomSec":{},"hungReleased":0,"failedStarts":0}}}]}
+        """
+    }
+    func date(_ s: String) -> Date { ISO8601DateFormatter().date(from: s)! }
+
+    func testParsesVersion1() throws {
+        let s = try XCTUnwrap(OrchestratorState.parse(Self.fixture()))
+        XCTAssertEqual(s.version, 1)
+        XCTAssertEqual(s.heartbeat, date("2026-11-26T09:15:00Z"))
+        XCTAssertEqual(s.problems?.map(\.class), ["reach", "nothing_running"])
+        XCTAssertEqual(s.problems?.last?.host, "")
+        XCTAssertEqual(s.problems?.first?.since, date("2026-11-26T09:00:00Z"))
+        XCTAssertEqual(s.events, [.init(time: date("2026-11-26T09:10:00Z"), kind: "memory_kill", host: "box-a", set: "widgets-stack", job: "e2e", text: "Killed for memory", attributed: true)])
+        XCTAssertEqual(s.eventsTotal24h, 12)
+        XCTAssertEqual(s.recommendations, [.init(id: "repeat_kill:widgets-stack", rule: "repeat_kill", text: "Give widgets-stack more memory")])
+        XCTAssertEqual(s.throughput?.first, .init(start: date("2026-11-26T09:05:00Z"), completed: 4, failed: 1, running: 2, waiting: 3))
+        XCTAssertEqual(s.failures?.first, .init(time: date("2026-11-26T09:10:00Z"), set: "widgets-stack", repo: "widgets", job: "e2e", jobId: "a1b2c3",
+                                                runner: "widgets-stack-1795015470612973000", runId: 17_000_000_001, fault: "memory_kill"))
+        XCTAssertEqual(s.failures?.last?.fault, "")
+        XCTAssertEqual(s.days?.map(\.date), ["2026-11-25", "2026-11-26"])
+        XCTAssertEqual(s.days?.first?.waitingSec, 600)
+        XCTAssertEqual(s.days?.first?.sets?["widgets-stack"], .init(runs: 9, waitP50Sec: 20, waitP90Sec: 95, failed: 1, memoryKills: 1))
+        XCTAssertEqual(s.days?.last?.sets?["widgets-stack"]?.waitSamplesSec, [10, 12])
+        XCTAssertEqual(s.days?.first?.hosts?["box-a"], .init(refusedSec: ["pressure": 120, "backpressure": 30, "unknown": 5], noRoomSec: ["slots": 300], hungReleased: 1, failedStarts: 2))
+    }
+
+    func testIgnoresUnknownFields() throws {
+        let text = #"{"version":1,"heartbeat":"2026-11-26T09:15:00Z","extra":{"a":[1]},"problems":[{"id":"p","host":"box-a","class":"brand_new_class","text":"t","since":"2026-11-26T09:00:00Z","severity":9}],"events":[{"kind":"brand_new_kind","colour":"red"}]}"#
+        let s = try XCTUnwrap(OrchestratorState.parse(text))
+        XCTAssertEqual(s.problems?.first?.class, "brand_new_class")
+        XCTAssertEqual(s.events?.first?.kind, "brand_new_kind")
+    }
+
+    func testTruncatedJSONIsNil() {
+        XCTAssertNil(OrchestratorState.parse(String(Self.fixture().dropLast(40))))
+        XCTAssertNil(OrchestratorState.parse(""))
+        XCTAssertNil(OrchestratorState.parse(#"{"heartbeat":"2026-11-26T09:15:00Z"}"#), "no version")
+        XCTAssertNil(OrchestratorState.parse(#"{"version":1}"#), "no heartbeat")
+        XCTAssertNil(OrchestratorState.parse(#"{"version":2,"heartbeat":"2026-11-26T09:15:00Z"}"#), "another version is not read as version 1")
+    }
+
+    func testMissingOptionalArraysParse() throws {
+        let s = try XCTUnwrap(OrchestratorState.parse(#"{"version":1,"heartbeat":"2026-11-26T09:15:00Z"}"#))
+        XCTAssertNil(s.problems); XCTAssertNil(s.events); XCTAssertNil(s.eventsTotal24h); XCTAssertNil(s.recommendations)
+        XCTAssertNil(s.throughput); XCTAssertNil(s.failures); XCTAssertNil(s.days)
+    }
+
+    func testStaleAfterFiveMinutes() throws {
+        let s = try XCTUnwrap(OrchestratorState.parse(Self.fixture()))
+        XCTAssertFalse(s.isStale(now: s.heartbeat.addingTimeInterval(300)))
+        XCTAssertTrue(s.isStale(now: s.heartbeat.addingTimeInterval(301)))
+    }
+
+    func testBadReadKeepsLastGoodState() {
+        let first = OrchestratorState.newest([("box-a", Self.fixture()), ("box-b", nil)], keeping: nil)
+        XCTAssertEqual(first.host, "box-a")
+        let good = first.state
+        XCTAssertNotNil(good)
+        for bad in [nil, String(Self.fixture().dropLast(40)), ""] as [String?] {
+            let r = OrchestratorState.newest([("box-a", bad)], keeping: good)
+            XCTAssertEqual(r.state, good); XCTAssertNil(r.host)
+        }
+        let old = Self.fixture(heartbeat: "2026-11-20T09:00:00Z"), new = Self.fixture(heartbeat: "2026-11-26T09:20:00Z")
+        XCTAssertEqual(OrchestratorState.newest([("box-b", old)], keeping: good).state, good, "an old file left on another Mac does not replace it")
+        for reads in [[("box-b", old), ("box-a", new)], [("box-a", new), ("box-b", old)]] {
+            let r = OrchestratorState.newest(reads, keeping: good)
+            XCTAssertEqual(r.host, "box-a"); XCTAssertEqual(r.state?.heartbeat, date("2026-11-26T09:20:00Z"))
+        }
+    }
+}

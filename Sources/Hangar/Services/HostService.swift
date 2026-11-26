@@ -247,6 +247,14 @@ actor HostService {
         return out.map(SnapshotParser.onDemandNames(fromDockerPs:)) ?? []
     }
 
+    /// The orchestrator's state file; nil on any failure. Most hosts do not run the orchestrator, so a missing file is
+    /// normal and nothing is logged.
+    func orchestratorState(_ host: HostSpec) async -> String? {
+        let cmd = #"cat "$HOME/.config/runner-orchestrator/state.json""#
+        if let t = host.target { return try? await ssh(t, cmd, timeout: 10) }
+        return try? await Shell.run("/bin/sh", ["-c", cmd], timeout: 10)
+    }
+
     /// nil when the host has no native runner dirs.
     func nativeSnapshot(_ host: HostSpec) async throws -> VMSnapshot? {
         let out: String

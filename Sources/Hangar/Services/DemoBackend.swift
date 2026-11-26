@@ -74,7 +74,40 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
             snap.tokenExpiry = now.addingTimeInterval(9 * 86_400)
             if hostDown { snap.unreachable = ["mac-mini"]; snap.warnings = ["mac-mini unreachable (ssh: connect to host mac-mini port 22: Operation timed out)"] }
         }
+        snap.orchestrator = Self.orchestratorState(now: now)
+        snap.orchestratorSeenOn = "mac-mini"
         return snap
+    }
+
+    /// A healthy orchestrator with one open problem, a day's history and six hours of throughput.
+    private static func orchestratorState(now: Date) -> OrchestratorState {
+        // The file holds whole seconds.
+        let now = Date(timeIntervalSince1970: now.timeIntervalSince1970.rounded(.down))
+        func ago(_ seconds: Double) -> Date { now.addingTimeInterval(-seconds) }
+        let utcDay = ISO8601DateFormatter()
+        utcDay.formatOptions = [.withFullDate]
+        return OrchestratorState(
+            version: 1, heartbeat: ago(20),
+            problems: [.init(id: "host:studio:reach", host: "studio", class: "reach", text: "studio has not answered for 14 minutes", since: ago(840))],
+            events: [.init(time: ago(5400), kind: "memory_kill", host: "mac-mini", set: "web-stack", job: "E2E tests", text: "web-stack was killed for using too much memory", attributed: true),
+                     .init(time: ago(2400), kind: "failed_start", host: "mac-mini", set: "web-plain", job: "", text: "A web-plain runner did not start", attributed: false),
+                     .init(time: ago(240), kind: "problem_opened", host: "studio", set: "", job: "", text: "studio has not answered for 14 minutes", attributed: false)],
+            eventsTotal24h: 3,
+            recommendations: [.init(id: "repeat_kill:web-stack", rule: "repeat_kill", text: "web-stack was killed for memory twice this week; consider giving it more")],
+            throughput: (0..<72).map { i in
+                .init(start: Date(timeIntervalSince1970: (now.timeIntervalSince1970 / 300).rounded(.down) * 300 - Double(71 - i) * 300),
+                      completed: [2, 3, 1, 4, 0, 2][i % 6], failed: i % 23 == 7 ? 1 : 0, running: [2, 3, 3, 1, 2][i % 5], waiting: i % 9 < 3 ? i % 4 : 0)
+            },
+            failures: [.init(time: ago(5400), set: "web-stack", repo: "web", job: "E2E tests", jobId: "8f3a1c", runner: "web-stack-1795015470612973000", runId: 17_000_000_101, fault: "memory_kill"),
+                       .init(time: ago(900), set: "web-plain", repo: "api-server", job: "Lint", jobId: "b27d90", runner: "web-plain-1795015491425386000", runId: 17_000_000_102, fault: "")],
+            days: (0..<7).reversed().map { back in
+                .init(date: utcDay.string(from: ago(Double(back) * 86_400)), waitingSec: 900 + back * 240,
+                      sets: ["web-stack": .init(runs: 18 + back, waitP50Sec: 25, waitP90Sec: 140 + back * 10, failed: back % 3, memoryKills: back == 0 ? 1 : 0,
+                                                waitSamplesSec: back == 0 ? [12, 25, 25, 80, 140] : nil),
+                             "web-plain": .init(runs: 31, waitP50Sec: 8, waitP90Sec: 35, failed: 1, memoryKills: 0, waitSamplesSec: back == 0 ? [5, 8, 35] : nil)],
+                      hosts: ["mac-mini": .init(refusedSec: ["pressure": 300 + back * 60, "backpressure": 120], noRoomSec: ["slots": 600], hungReleased: 0, failedStarts: back == 0 ? 1 : 0),
+                              "studio": .init(refusedSec: ["unreachable": back == 0 ? 840 : 0], noRoomSec: [:], hungReleased: 0, failedStarts: 0)])
+            })
     }
 
     func restart(_ id: String, config: Config) async throws { lock.withLock { restarted[id] = Date() } }

@@ -24,6 +24,11 @@ struct BackendSnapshot: Sendable {
     /// Latest actions/runner release (e.g. "2.338.0"), if known.
     var latestRunner: String? = nil
     var latestRunnerPublished: Date? = nil
+    /// The orchestrator's last good state since launch; nil when none has been read. It may be stale (`isStale`).
+    var orchestrator: OrchestratorState? = nil
+    /// The host that last supplied a state, remembered across launches. Set while `orchestrator` is nil means the
+    /// orchestrator was seen before and has not reported since launch; nil means it has never been seen.
+    var orchestratorSeenOn: String? = nil
 }
 
 /// Source of raw facts and the place side effects happen. Live = GitHub + Colima, Demo = scripted.
@@ -46,6 +51,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
     private var located: [String: Place] = [:]          // runner name -> where it lives
     private var permissionHint = false
     private var labels: [String: String] = [:]          // host target -> label from the last successful probe
+    private var orchestrator: OrchestratorState?        // the last good state
 
     struct Place: Sendable { var host: HostSpec; var profile: String?; var dir: String }
 
@@ -70,10 +76,13 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         var warnings: [String] = []
         var unreachable: [String] = []
         var hostOf: [String: String] = [:]                  // on-demand runner name -> the Mac whose orchestrator VM runs it
+        var stateReads: [(host: String, text: String?)] = []
         self.lock.withLock { self.permissionHint = false }
-        await withTaskGroup(of: ([Machine], String?, String?, [String: String]).self) { group in
+        await withTaskGroup(of: ([Machine], String?, String?, [String: String], (host: String, text: String?)).self) { group in
             for h in config.hosts.map(HostSpec.init) {
                 group.addTask {
+                    // Read alongside the probe, so it lengthens the poll only when it is slower than the whole probe.
+                    async let stateText = hosts.orchestratorState(h)
                     var out: [Machine] = []
                     var hostname = ""
                     var reached = false
@@ -114,13 +123,21 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                     for p in SnapshotParser.orchestratorProfiles(in: vmsOrNil ?? [:]) {
                         for n in await hosts.onDemandNames(h, profile: p) { here[n] = label }
                     }
-                    return (out, warning, down, here)
+                    return (out, warning, down, here, (label, await stateText))
                 }
             }
-            for await (m, w, down, here) in group {
+            for await (m, w, down, here, state) in group {
                 machines += m; if let w { warnings.append(w) }; if let down { unreachable.append(down) }
                 hostOf.merge(here) { a, _ in a }
+                stateReads.append(state)
             }
+        }
+        // Kept before the GitHub calls, so a poll they fail does not lose what was read.
+        let orchestrator = lock.withLock {
+            let newest = OrchestratorState.newest(stateReads, keeping: self.orchestrator)
+            self.orchestrator = newest.state
+            if let host = newest.host { UserDefaults.standard.set(host, forKey: OrchestratorState.seenOnKey) }
+            return newest.state
         }
 
         // Repos seen before still count when their runner VM is stopped (see RepoMemory).
@@ -164,6 +181,8 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
             return (allR, allJ, allW)
         }
         var snap = Self.assemble(machines: machines, runners: runners, jobs: jobs, now: Date(), hostOf: hostOf)
+        snap.orchestrator = orchestrator
+        snap.orchestratorSeenOn = UserDefaults.standard.string(forKey: OrchestratorState.seenOnKey)
         snap.warnings = (warnings + repoWarnings).sorted()
         snap.unreachable = unreachable.sorted()
         snap.tokenExpiry = await github.tokenExpiry()
