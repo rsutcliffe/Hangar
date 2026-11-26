@@ -74,7 +74,55 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
             snap.tokenExpiry = now.addingTimeInterval(9 * 86_400)
             if hostDown { snap.unreachable = ["mac-mini"]; snap.warnings = ["mac-mini unreachable (ssh: connect to host mac-mini port 22: Operation timed out)"] }
         }
+        snap.orchestrator = Self.orchestratorState(now: now)
+        snap.orchestratorSeenOn = "mac-mini"
+        snap.failedSteps = [RunnerJobKey(runId: 17_000_000_103, runner: "web-plain-1795015491425386000"): "Run integration tests",
+                            RunnerJobKey(runId: 17_000_000_101, runner: "web-plain-1795015400000000002"): "Compile"]
         return snap
+    }
+
+    /// A healthy orchestrator with one open problem, a day's history and six hours of throughput.
+    private static func orchestratorState(now: Date) -> OrchestratorState {
+        // The file holds whole seconds.
+        let now = Date(timeIntervalSince1970: now.timeIntervalSince1970.rounded(.down))
+        func ago(_ seconds: Double) -> Date { now.addingTimeInterval(-seconds) }
+        let utcDay = ISO8601DateFormatter()
+        utcDay.formatOptions = [.withFullDate]
+        let unreachable = "github unreachable from the vm: exit status 28"
+        func event(_ time: Date, _ kind: String, _ host: String, _ set: String, _ text: String) -> OrchestratorState.Event {
+            .init(time: time, kind: kind, host: host, set: set, job: "", text: text, attributed: false)
+        }
+        return OrchestratorState(
+            version: 1, heartbeat: ago(20),
+            problems: [.init(id: "host:studio:reach", host: "studio", class: "reach", text: unreachable, since: ago(840))],
+            // As the writer sends them: no job; a removed or released runner's text is only its name; a problem's text is the
+            // same when it opens and when it closes. It sends no memory kills or recommendations yet.
+            events: [event(ago(15_300), "runner_error", "mac-mini", "web-plain", "exit status 1"),
+                     event(ago(5400), "hung_release", "mac-mini", "web-stack", "web-stack-1795015470612973000"),
+                     event(ago(3600), "problem_closed", "studio", "", unreachable),
+                     event(ago(2400), "failed_start", "mac-mini", "web-plain", "failed to generate JIT runner config: 503 Service Unavailable"),
+                     event(ago(1200), "idle_removed", "mac-mini", "web-plain", "web-plain-1795015440000000003"),
+                     event(ago(240), "problem_opened", "studio", "", unreachable)],
+            eventsTotal24h: 6,
+            recommendations: [],
+            throughput: (0..<72).map { i in
+                .init(start: Date(timeIntervalSince1970: (now.timeIntervalSince1970 / 300).rounded(.down) * 300 - Double(71 - i) * 300),
+                      completed: [2, 3, 1, 4, 2, 2][i % 6], failed: [20, 40, 53, 68].contains(i) ? 1 : 0,      // one per failed run below
+                      running: [2, 3, 3, 1, 2][i % 5], waiting: i % 9 < 3 ? i % 4 : 0)
+            },
+            failures: [.init(time: ago(15_300), set: "web-plain", repo: "ios-app", job: "Unit tests", jobId: "41c0aa", runner: "web-plain-1795015400000000001", runId: 17_000_000_100, fault: "runner_error"),
+                       .init(time: ago(9300), set: "web-plain", repo: "api-server", job: "Build", jobId: "77de12", runner: "web-plain-1795015400000000002", runId: 17_000_000_101, fault: ""),
+                       .init(time: ago(5400), set: "web-stack", repo: "web", job: "E2E tests", jobId: "8f3a1c", runner: "web-stack-1795015470612973000", runId: 17_000_000_102, fault: "hung_release"),
+                       .init(time: ago(900), set: "web-plain", repo: "api-server", job: "Integration tests against the previous release", jobId: "b27d90", runner: "web-plain-1795015491425386000", runId: 17_000_000_103, fault: ""),
+                       .init(time: ago(840), set: "web-plain", repo: "api-server", job: "Test results", jobId: "b27d91", runner: "web-plain-1795015491425386001", runId: 17_000_000_103, fault: "")],
+            days: (0..<7).reversed().map { back in
+                .init(date: utcDay.string(from: ago(Double(back) * 86_400)), waitingSec: 900 + back * 240,
+                      sets: ["web-stack": .init(runs: 18 + back, waitP50Sec: 25, waitP90Sec: 140 + back * 10, failed: back % 3, memoryKills: 0,
+                                                waitSamplesSec: back == 0 ? [12, 25, 25, 80, 140] : nil),
+                             "web-plain": .init(runs: 31, waitP50Sec: 8, waitP90Sec: 35, failed: 1, memoryKills: 0, waitSamplesSec: back == 0 ? [5, 8, 35] : nil)],
+                      hosts: ["mac-mini": .init(refusedSec: ["pressure": 300 + back * 60, "backpressure": 120], noRoomSec: ["slots": 600], hungReleased: 0, failedStarts: back == 0 ? 1 : 0),
+                              "studio": .init(refusedSec: ["reach": back == 0 ? 840 : 0], noRoomSec: [:], hungReleased: 0, failedStarts: 0)])
+            })
     }
 
     func restart(_ id: String, config: Config) async throws { lock.withLock { restarted[id] = Date() } }

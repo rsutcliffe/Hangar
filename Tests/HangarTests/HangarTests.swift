@@ -757,6 +757,11 @@ final class RestartWatchTests: XCTestCase {
 
 @MainActor
 final class HistoryFlushTests: XCTestCase {
+    /// HangarApp does not start its store when this is set; without it a test run would poll real hosts and write real settings.
+    func testTheTestHostIsRecognised() {
+        XCTAssertNotNil(ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"])
+    }
+
     func testFlushWritesTheLatestReadingsAndDemoDoesNot() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("hangar-flush-\(UUID().uuidString)")
         let url = dir.appendingPathComponent("u.json")
@@ -1376,7 +1381,10 @@ final class UpdateCheckTests: XCTestCase {
         XCTAssertEqual(ThrottleRule.decide(held, protect: false, underPressure: true, calmSince: nil, now: now).release, ["b"])                         // setting switched off
     }
     func testStoreHoldsAnIdleRunnerUnderPressureAndNeverTouchesABusyOne() async {
-        UserDefaults.standard.set(true, forKey: Config.Key.protectJobs); defer { UserDefaults.standard.removeObject(forKey: Config.Key.protectJobs) }
+        // The test host shares the installed app's settings, so the user's own value is put back (or left absent).
+        let was = UserDefaults.standard.object(forKey: Config.Key.protectJobs)
+        UserDefaults.standard.set(true, forKey: Config.Key.protectJobs)
+        defer { UserDefaults.standard.set(was, forKey: Config.Key.protectJobs) }      // setting nil removes the key
         func obs(_ id: String, busy: Bool) -> RunnerObservation {
             RunnerObservation(id: id, arch: .arm64, cpus: 2, memoryGB: 4, vmRunning: true, ghOnline: true, busy: busy, host: "box",
                               job: nil, cpuPercent: 1, memUsedGB: 1, lastJobEndedAt: nil,
@@ -1699,3 +1707,785 @@ final class OnDemandFailureTests: XCTestCase {
     }
 }
 
+
+final class OrchestratorStateTests: XCTestCase {
+    /// state.json version 1 with every field the writer produces; all names are made up.
+    static func fixture(heartbeat: String = "2026-11-26T09:15:00Z") -> String {
+        """
+        {"version":1,"heartbeat":"\(heartbeat)",
+         "problems":[{"id":"host:box-a:reach","host":"box-a","class":"reach","text":"No answer over ssh","since":"2026-11-26T09:00:00Z"},
+           {"id":"nothing_running","host":"","class":"nothing_running","text":"Jobs wait and nothing runs","since":"2026-11-26T09:01:00Z"}],
+         "events":[{"time":"2026-11-26T09:10:00Z","kind":"memory_kill","host":"box-a","set":"widgets-stack","job":"e2e","text":"Killed for memory","attributed":true}],
+         "eventsTotal24h":12,
+         "recommendations":[{"id":"repeat_kill:widgets-stack","rule":"repeat_kill","text":"Give widgets-stack more memory"}],
+         "throughput":[{"start":"2026-11-26T09:05:00Z","completed":4,"failed":1,"running":2,"waiting":3},
+           {"start":"2026-11-26T09:10:00Z","completed":0,"failed":0,"running":1,"waiting":0}],
+         "failures":[{"time":"2026-11-26T09:10:00Z","set":"widgets-stack","repo":"widgets","job":"e2e","jobId":"a1b2c3","runner":"widgets-stack-1795015470612973000","runId":17000000001,"fault":"memory_kill"},
+           {"time":"2026-11-26T09:12:00Z","set":"widgets-plain","repo":"widgets","job":"lint","jobId":"d4e5f6","runner":"widgets-plain-1795015491425386000","runId":0,"fault":""}],
+         "days":[{"date":"2026-11-25","waitingSec":600,
+             "sets":{"widgets-stack":{"runs":9,"waitP50Sec":20,"waitP90Sec":95,"failed":1,"memoryKills":1}},
+             "hosts":{"box-a":{"refusedSec":{"pressure":120,"backpressure":30,"unknown":5},"noRoomSec":{"slots":300},"hungReleased":1,"failedStarts":2}}},
+           {"date":"2026-11-26","waitingSec":0,
+             "sets":{"widgets-stack":{"runs":2,"waitP50Sec":10,"waitP90Sec":12,"failed":0,"memoryKills":0,"waitSamplesSec":[10,12]}},
+             "hosts":{"box-a":{"refusedSec":{},"noRoomSec":{},"hungReleased":0,"failedStarts":0}}}]}
+        """
+    }
+    func date(_ s: String) -> Date { ISO8601DateFormatter().date(from: s)! }
+
+    func testParsesVersion1() throws {
+        let s = try XCTUnwrap(OrchestratorState.parse(Self.fixture()))
+        XCTAssertEqual(s.version, 1)
+        XCTAssertEqual(s.heartbeat, date("2026-11-26T09:15:00Z"))
+        XCTAssertEqual(s.problems?.map(\.class), ["reach", "nothing_running"])
+        XCTAssertEqual(s.problems?.last?.host, "")
+        XCTAssertEqual(s.problems?.first?.since, date("2026-11-26T09:00:00Z"))
+        XCTAssertEqual(s.events, [.init(time: date("2026-11-26T09:10:00Z"), kind: "memory_kill", host: "box-a", set: "widgets-stack", job: "e2e", text: "Killed for memory", attributed: true)])
+        XCTAssertEqual(s.eventsTotal24h, 12)
+        XCTAssertEqual(s.recommendations, [.init(id: "repeat_kill:widgets-stack", rule: "repeat_kill", text: "Give widgets-stack more memory")])
+        XCTAssertEqual(s.throughput?.first, .init(start: date("2026-11-26T09:05:00Z"), completed: 4, failed: 1, running: 2, waiting: 3))
+        XCTAssertEqual(s.failures?.first, .init(time: date("2026-11-26T09:10:00Z"), set: "widgets-stack", repo: "widgets", job: "e2e", jobId: "a1b2c3",
+                                                runner: "widgets-stack-1795015470612973000", runId: 17_000_000_001, fault: "memory_kill"))
+        XCTAssertEqual(s.failures?.last?.fault, "")
+        XCTAssertEqual(s.days?.map(\.date), ["2026-11-25", "2026-11-26"])
+        XCTAssertEqual(s.days?.first?.waitingSec, 600)
+        XCTAssertEqual(s.days?.first?.sets?["widgets-stack"], .init(runs: 9, waitP50Sec: 20, waitP90Sec: 95, failed: 1, memoryKills: 1))
+        XCTAssertEqual(s.days?.last?.sets?["widgets-stack"]?.waitSamplesSec, [10, 12])
+        XCTAssertEqual(s.days?.first?.hosts?["box-a"], .init(refusedSec: ["pressure": 120, "backpressure": 30, "unknown": 5], noRoomSec: ["slots": 300], hungReleased: 1, failedStarts: 2))
+    }
+
+    func testIgnoresUnknownFields() throws {
+        let text = #"{"version":1,"heartbeat":"2026-11-26T09:15:00Z","extra":{"a":[1]},"problems":[{"id":"p","host":"box-a","class":"brand_new_class","text":"t","since":"2026-11-26T09:00:00Z","severity":9}],"events":[{"kind":"brand_new_kind","colour":"red"}]}"#
+        let s = try XCTUnwrap(OrchestratorState.parse(text))
+        XCTAssertEqual(s.problems?.first?.class, "brand_new_class")
+        XCTAssertEqual(s.events?.first?.kind, "brand_new_kind")
+    }
+
+    func testTruncatedJSONIsNil() {
+        XCTAssertNil(OrchestratorState.parse(String(Self.fixture().dropLast(40))))
+        XCTAssertNil(OrchestratorState.parse(""))
+        XCTAssertNil(OrchestratorState.parse(#"{"heartbeat":"2026-11-26T09:15:00Z"}"#), "no version")
+        XCTAssertNil(OrchestratorState.parse(#"{"version":1}"#), "no heartbeat")
+        XCTAssertNil(OrchestratorState.parse(#"{"version":2,"heartbeat":"2026-11-26T09:15:00Z"}"#), "another version is not read as version 1")
+    }
+
+    func testMissingOptionalArraysParse() throws {
+        let s = try XCTUnwrap(OrchestratorState.parse(#"{"version":1,"heartbeat":"2026-11-26T09:15:00Z"}"#))
+        XCTAssertNil(s.problems); XCTAssertNil(s.events); XCTAssertNil(s.eventsTotal24h); XCTAssertNil(s.recommendations)
+        XCTAssertNil(s.throughput); XCTAssertNil(s.failures); XCTAssertNil(s.days)
+    }
+
+    func testStaleAfterFiveMinutes() throws {
+        let s = try XCTUnwrap(OrchestratorState.parse(Self.fixture()))
+        XCTAssertFalse(s.isStale(now: s.heartbeat.addingTimeInterval(300)))
+        XCTAssertTrue(s.isStale(now: s.heartbeat.addingTimeInterval(301)))
+    }
+
+    typealias Held = OrchestratorState.Held
+    let hosts = ["me@box-a", "me@box-b"]
+    /// One host's read; the label is the target without its user.
+    func read(_ name: String, _ text: String?) -> OrchestratorState.Read { .init(target: "me@\(name)", host: name, text: text) }
+    func file(_ heartbeat: String) -> String { Self.fixture(heartbeat: heartbeat) }
+
+    func testBadReadKeepsLastGoodState() {
+        let now = date("2026-11-26T09:16:00Z")
+        let good = Held().updated(with: [read("box-a", Self.fixture()), read("box-b", nil)], hosts: hosts, now: now)
+        XCTAssertEqual(good.host, "box-a")
+        XCTAssertNotNil(good.state)
+        for bad in [nil, String(Self.fixture().dropLast(40)), ""] as [String?] {
+            XCTAssertEqual(good.updated(with: [read("box-a", bad)], hosts: hosts, now: now), good)
+        }
+        let old = file("2026-11-20T09:00:00Z"), new = file("2026-11-26T09:20:00Z")
+        XCTAssertEqual(good.updated(with: [read("box-b", old)], hosts: hosts, now: now), good, "an old file left on another Mac does not replace it")
+        for reads in [[read("box-b", old), read("box-a", new)], [read("box-a", new), read("box-b", old)]] {
+            let r = good.updated(with: reads, hosts: hosts, now: now)
+            XCTAssertEqual(r.host, "box-a"); XCTAssertEqual(r.state?.heartbeat, date("2026-11-26T09:20:00Z"))
+        }
+    }
+
+    func testSameHostReadAlwaysReplacesTheHeldState() {
+        let now = date("2026-11-26T09:16:00Z")
+        let held = Held().updated(with: [read("box-a", file("2026-11-26T09:18:00Z"))], hosts: hosts, now: now)
+        // The writer's clock has been put right: its next file has an older heartbeat.
+        let fixed = held.updated(with: [read("box-a", file("2026-11-26T09:15:00Z"))], hosts: hosts, now: now)
+        XCTAssertEqual(fixed.state?.heartbeat, date("2026-11-26T09:15:00Z"))
+        XCTAssertEqual(fixed.host, "box-a")
+    }
+
+    func testHeartbeatFarAheadIsIgnored() {
+        let now = date("2026-11-26T09:16:00Z")
+        let current = file("2026-11-26T09:15:00Z"), ahead = file("2026-11-26T09:21:01Z"), slightly = file("2026-11-26T09:21:00Z")
+        for reads in [[read("box-a", current), read("box-b", ahead)], [read("box-b", ahead), read("box-a", current)]] {
+            XCTAssertEqual(Held().updated(with: reads, hosts: hosts, now: now).host, "box-a")
+        }
+        // The only file anywhere: not held, but the orchestrator counts as seen, so the card does not vanish or look healthy.
+        let only = Held().updated(with: [read("box-b", ahead)], hosts: hosts, now: now)
+        XCTAssertNil(only.state)
+        XCTAssertEqual(only.host, "box-b")
+        XCTAssertEqual(OrchestratorCard.sections(state: only.state, seen: only.host != nil, otherVersion: only.otherVersion, now: now),
+                       [.notReporting("No heartbeat read since Hangar started")])
+        // It does not replace a held state, even from the supplying host.
+        let good = Held().updated(with: [read("box-a", current)], hosts: hosts, now: now)
+        XCTAssertEqual(good.updated(with: [read("box-a", ahead)], hosts: hosts, now: now), good)
+        XCTAssertEqual(good.updated(with: [read("box-b", ahead)], hosts: hosts, now: now), good)
+        // A held state that is now far ahead, because this Mac's clock was set back, is dropped too.
+        let setBack = good.updated(with: [read("box-a", nil)], hosts: hosts, now: date("2026-11-26T08:00:00Z"))
+        XCTAssertNil(setBack.state); XCTAssertEqual(setBack.host, "box-a")
+        XCTAssertNotNil(Held().updated(with: [read("box-a", slightly)], hosts: hosts, now: now).state, "300 s ahead is within the allowance")
+    }
+
+    func testSeenOnUsesTheUnreachableHostLabel() {
+        XCTAssertEqual(LiveBackend.reportedLabel(reached: true, label: "box-a", target: "me@box-a.invalid", cached: "old"), "box-a")
+        XCTAssertEqual(LiveBackend.reportedLabel(reached: false, label: "short", target: "me@box-a.invalid", cached: "box-a"), "box-a")
+        XCTAssertEqual(LiveBackend.reportedLabel(reached: false, label: "short", target: "me@box-a.invalid", cached: nil), "me@box-a.invalid")
+        XCTAssertEqual(LiveBackend.reportedLabel(reached: false, label: "this Mac", target: nil, cached: nil), "this Mac")
+    }
+
+    func testSeenOnIsClearedWhenNoConfiguredHostMatches() throws {
+        let suite = "hangar-orch-\(UUID().uuidString)"
+        let d = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { d.removePersistentDomain(forName: suite) }
+        let now = date("2026-11-26T09:16:00Z")
+        Held().updated(with: [read("box-a", Self.fixture())], hosts: hosts, now: now).remember(in: d)
+        XCTAssertEqual(d.string(forKey: OrchestratorState.seenOnKey), "box-a")
+        // A new launch with the host down: still remembered.
+        let relaunched = Held.remembered(in: d).updated(with: [read("box-a", nil)], hosts: hosts, now: now)
+        XCTAssertEqual(relaunched.host, "box-a"); XCTAssertNil(relaunched.state)
+        let held = Held().updated(with: [read("box-a", Self.fixture())], hosts: hosts, now: now)
+        let removed = held.updated(with: [read("box-b", nil)], hosts: ["me@box-b"], now: now)
+        XCTAssertNil(removed.host); XCTAssertNil(removed.state, "a removed host's state is not kept either")
+        removed.remember(in: d)
+        XCTAssertNil(d.string(forKey: OrchestratorState.seenOnKey))
+        XCTAssertNil(Held.remembered(in: d).host)
+    }
+
+    func testOtherVersionSaysHangarNeedsUpdating() {
+        let now = date("2026-11-26T09:16:00Z")
+        let v2 = #"{"version":2,"heartbeat":{"at":"later"}}"#
+        let held = Held().updated(with: [read("box-a", v2)], hosts: hosts, now: now)
+        XCTAssertTrue(held.otherVersion)
+        XCTAssertEqual(OrchestratorCard.sections(state: held.state, seen: false, otherVersion: held.otherVersion, now: now), [.needsUpdate])
+        for unreadable in [nil, "", "{", #"{"heartbeat":"x"}"#, Self.fixture()] as [String?] {
+            XCTAssertFalse(Held().updated(with: [read("box-a", unreadable)], hosts: hosts, now: now).otherVersion)
+        }
+        // A current version 1 state wins over a leftover file; a stale one gives way to the update message.
+        let state = OrchestratorState.parse(Self.fixture())!
+        XCTAssertNotEqual(OrchestratorCard.sections(state: state, seen: true, otherVersion: true, now: now).first, .needsUpdate)
+        XCTAssertEqual(OrchestratorCard.sections(state: state, seen: true, otherVersion: true, now: now.addingTimeInterval(600)), [.needsUpdate])
+        var polls = Polls(state: state, otherVersion: true, startedAt: now)
+        for t in stride(from: 600.0, through: 1800, by: 60) { XCTAssertEqual(polls.at(t), [], "it is reporting, so no 'not reporting' notice") }
+    }
+
+    /// Successful polls of one store: `at` seconds after it started, with the Mac awake all along unless `awake` says otherwise.
+    struct Polls {
+        var announcer = OrchestratorAnnouncer()
+        var state: OrchestratorState?
+        var seen = true
+        var otherVersion = false
+        var startedAt: Date
+        var quiet = false
+        var lost: OrchestratorState.Lost? = nil
+        mutating func at(_ t: TimeInterval, awake: TimeInterval? = nil) -> [OrchestratorState.Notice] {
+            announcer.due(state: state, seen: seen, otherVersion: otherVersion, lost: lost, startedAt: startedAt,
+                          now: startedAt.addingTimeInterval(t), awake: 5000 + (awake ?? t), maxGap: 180, quiet: quiet)
+        }
+        /// A poll a minute from `first` to `last`; the keys said, by time.
+        mutating func keys(_ first: TimeInterval, through last: TimeInterval) -> [TimeInterval: [String]] {
+            var said: [TimeInterval: [String]] = [:]
+            for t in stride(from: first, through: last, by: 60) {
+                let due = at(t)
+                if !due.isEmpty { said[t] = due.map(\.key) }
+            }
+            return said
+        }
+    }
+
+    /// What is held after one poll that follows a good read of box-a's file: each host with whether it was reached.
+    func held(_ polled: [(String, Bool)], local: Bool? = nil) -> Held {
+        let now = date("2026-11-26T09:16:00Z")
+        let all = hosts + ["local"]
+        let first = Held().updated(with: [read("box-a", Self.fixture())], hosts: all, now: now)
+        var reads = polled.map { OrchestratorState.Read(target: "me@\($0.0)", host: $0.0, text: nil, reached: $0.1) }
+        if let local { reads.append(.init(target: "local", host: "this Mac", text: nil, reached: local)) }
+        return first.updated(with: reads, hosts: all, now: now)
+    }
+
+    let away = OrchestratorState.Lost(mac: "box-a", othersRespond: false)
+    let cut = OrchestratorState.Lost(mac: "box-a", othersRespond: true)
+
+    func testOtherRemoteRespondsSaysCannotReach() {
+        let h = held([("box-a", false), ("box-b", true)], local: true)
+        XCTAssertEqual(h.lost, cut)
+        let start = date("2026-11-26T09:16:00Z")
+        let stale = quietState(heartbeat: start, age: 600)
+        XCTAssertEqual(OrchestratorCard.sections(state: stale, seen: true, otherVersion: false, lost: cut, now: start),
+                       [.cannotReach("box-a", "Last heartbeat 10m ago")])
+        XCTAssertEqual(OrchestratorCard.sections(state: nil, seen: true, otherVersion: false, lost: cut, now: start),
+                       [.cannotReach("box-a", "No heartbeat read since Hangar started")])
+        XCTAssertEqual(OrchestratorCard.sections(state: nil, seen: true, otherVersion: true, lost: cut, now: start), [.needsUpdate])
+        XCTAssertEqual(OrchestratorCard.sections(state: quietState(heartbeat: start), seen: true, otherVersion: false, lost: cut, now: start),
+                       [.noProblems], "a current state is shown, reached or not")
+        var polls = Polls(state: stale, startedAt: start, lost: cut)
+        XCTAssertEqual(polls.keys(0, through: 240), [:])
+        XCTAssertEqual(polls.at(300), [.init(key: "orch|unreachable", title: "Cannot reach box-a", body: "Last heartbeat 15m ago.")])
+        XCTAssertEqual(polls.keys(360, through: 1800), [:])
+        var unread = Polls(state: nil, startedAt: start, lost: cut)
+        XCTAssertEqual(unread.keys(0, through: 1800), [300: ["orch|unreachable"]])
+    }
+
+    func testNoRemoteRespondsIsSilentButTheCardSaysCannotReach() {
+        let h = held([("box-a", false), ("box-b", false)], local: true)
+        XCTAssertEqual(h.lost, away, "this Mac does not count")
+        let start = date("2026-11-26T09:16:00Z")
+        XCTAssertEqual(OrchestratorCard.sections(state: nil, seen: true, otherVersion: false, lost: away, now: start),
+                       [.cannotReach("box-a", "No heartbeat read since Hangar started")])
+        var polls = Polls(state: quietState(heartbeat: start, age: 600), startedAt: start, lost: away)
+        XCTAssertEqual(polls.keys(0, through: 3600), [:])
+    }
+
+    func testOnlyRemoteIsTheOrchestratorsMac() {
+        let all = ["local", "me@box-a"]
+        let now = date("2026-11-26T09:16:00Z")
+        let good = Held().updated(with: [read("box-a", Self.fixture())], hosts: all, now: now)
+        let h = good.updated(with: [.init(target: "me@box-a", host: "box-a", text: nil, reached: false),
+                                    .init(target: "local", host: "this Mac", text: nil, reached: true)], hosts: all, now: now)
+        XCTAssertEqual(h.lost, away)
+    }
+
+    func testReachedButStaleIsNotReporting() {
+        // The probe worked and the state read did not.
+        let h = held([("box-a", true), ("box-b", true)])
+        XCTAssertNil(h.lost)
+        // The probe failed and the state read worked: the file shows the Mac was reached.
+        let now = date("2026-11-26T09:30:00Z")
+        let readOnly = h.updated(with: [.init(target: "me@box-a", host: "box-a", text: Self.fixture(), reached: false),
+                                        .init(target: "me@box-b", host: "box-b", text: nil, reached: true)], hosts: hosts, now: now)
+        XCTAssertNotNil(readOnly.state)
+        XCTAssertNil(readOnly.lost)
+        XCTAssertEqual(OrchestratorCard.sections(state: readOnly.state, seen: true, otherVersion: false, lost: readOnly.lost, now: now),
+                       [.notReporting("Last heartbeat 15m ago")])
+        var polls = Polls(state: readOnly.state, startedAt: now, lost: readOnly.lost)
+        XCTAssertEqual(polls.keys(0, through: 1800), [300: ["orch|stale"]])
+        // Text that cannot be parsed was still read from the Mac.
+        let garbled = h.updated(with: [.init(target: "me@box-a", host: "box-a", text: "{", reached: false)], hosts: hosts, now: now)
+        XCTAssertNil(garbled.lost)
+        // For another Mac, "responded" still means its probe worked: a file read from it does not count.
+        let otherReadOnly = h.updated(with: [.init(target: "me@box-a", host: "box-a", text: nil, reached: false),
+                                             .init(target: "me@box-b", host: "box-b", text: "{", reached: false)], hosts: hosts, now: now)
+        XCTAssertEqual(otherReadOnly.lost, away)
+    }
+
+    /// A poll a minute, "cannot reach" on even minutes and `odd` on odd ones; the keys said, by time.
+    func alternate(_ polls: inout Polls, _ first: TimeInterval, through last: TimeInterval,
+                   odd: OrchestratorState.Lost? = nil) -> [TimeInterval: [String]] {
+        var said: [TimeInterval: [String]] = [:]
+        for t in stride(from: first, through: last, by: 60) {
+            polls.lost = Int(t / 60) % 2 == 0 ? cut : odd
+            let due = polls.at(t)
+            if !due.isEmpty { said[t] = due.map(\.key) }
+        }
+        return said
+    }
+
+    func testAlternatingSilenceIsStillAnnouncedOnce() {
+        let start = date("2026-11-26T09:16:00Z")
+        let stale = quietState(heartbeat: start, age: 600)
+        var polls = Polls(state: stale, startedAt: start)
+        XCTAssertEqual(alternate(&polls, 0, through: 3600), [900: ["orch|stale"]])
+        // With no remote Mac responding every other minute, neither measure gets anywhere.
+        var out = Polls(state: stale, startedAt: start)
+        XCTAssertEqual(alternate(&out, 0, through: 3600, odd: away), [:])
+        // Quiet hours hold it; it is said once when they end.
+        var quiet = Polls(state: stale, startedAt: start, quiet: true)
+        XCTAssertEqual(alternate(&quiet, 0, through: 1200), [:])
+        quiet.quiet = false
+        XCTAssertEqual(alternate(&quiet, 1260, through: 3600), [1260: ["orch|stale"]])
+    }
+
+    func testLongCountIsBrokenLikeTheShortOne() {
+        let start = date("2026-11-26T09:16:00Z")
+        let stale = quietState(heartbeat: start, age: 600)
+        // A gap longer than allowed starts it again.
+        var slept = Polls(state: stale, startedAt: start)
+        XCTAssertEqual(alternate(&slept, 0, through: 600), [:])
+        XCTAssertEqual(alternate(&slept, 1200, through: 3000), [2100: ["orch|stale"]])
+        // A failed poll leaves out only the time it falls in.
+        var failing = Polls(state: stale, startedAt: start)
+        XCTAssertEqual(alternate(&failing, 0, through: 600), [:])
+        failing.announcer.pollFailed()
+        XCTAssertEqual(alternate(&failing, 660, through: 1800), [960: ["orch|unreachable"]])
+        // One poll with no remote Mac responding starts it again.
+        var left = Polls(state: stale, startedAt: start)
+        XCTAssertEqual(alternate(&left, 0, through: 540), [:])
+        left.lost = away
+        XCTAssertEqual(left.at(600), [])
+        XCTAssertEqual(alternate(&left, 660, through: 2400), [1560: ["orch|unreachable"]])
+        // So does a current state.
+        var back = Polls(state: stale, startedAt: start)
+        XCTAssertEqual(alternate(&back, 0, through: 540), [:])
+        back.state = quietState(heartbeat: start.addingTimeInterval(600))
+        XCTAssertEqual(back.at(600), [])
+        back.state = stale
+        XCTAssertEqual(alternate(&back, 660, through: 2400), [1560: ["orch|unreachable"]])
+    }
+
+    func testLocalOrchestratorIsNeverCannotReach() {
+        let all = ["local", "me@box-b"]
+        let now = date("2026-11-26T09:16:00Z")
+        let good = Held().updated(with: [.init(target: "local", host: "this Mac", text: Self.fixture())], hosts: all, now: now)
+        for remote in [true, false] {
+            let h = good.updated(with: [.init(target: "local", host: "this Mac", text: nil, reached: false),
+                                        .init(target: "me@box-b", host: "box-b", text: nil, reached: remote)], hosts: all, now: now)
+            XCTAssertEqual(h.target, "local")
+            XCTAssertNil(h.lost)
+        }
+    }
+
+    /// A file left on another Mac must not take the orchestrator's place while its own Mac cannot be reached.
+    func testLeftoverFileDoesNotReplaceAnUnreachedOrchestratorsMac() {
+        let now = date("2026-11-26T09:16:00Z")
+        let remembered = Held(target: "me@box-a", host: "box-a")
+        let lostA = OrchestratorState.Read(target: "me@box-a", host: "box-a", text: nil, reached: false)
+        let old = remembered.updated(with: [lostA, read("box-b", file("2026-11-20T09:00:00Z"))], hosts: hosts, now: now)
+        XCTAssertEqual(old.target, "me@box-a"); XCTAssertNil(old.state); XCTAssertEqual(old.lost, cut)
+        let moved = remembered.updated(with: [lostA, read("box-b", file("2026-11-26T09:15:00Z"))], hosts: hosts, now: now)
+        XCTAssertEqual(moved.target, "me@box-b", "a current file means the orchestrator is there now"); XCTAssertNil(moved.lost)
+    }
+
+    func testAwayThenHomeDoesNotNotifyAtOnce() {
+        let start = date("2026-11-26T09:16:00Z")
+        let stale = quietState(heartbeat: start, age: 600)
+        for (home, key) in [(cut, "orch|unreachable"), (nil, "orch|stale")] {
+            var polls = Polls(state: stale, startedAt: start, lost: away)
+            XCTAssertEqual(polls.keys(0, through: 3600), [:])
+            polls.lost = home
+            XCTAssertEqual(polls.keys(3660, through: 5400), [3960: [key]])
+        }
+        // 240 s counted before leaving does not carry over.
+        var polls = Polls(state: stale, startedAt: start, lost: cut)
+        XCTAssertEqual(polls.keys(0, through: 240), [:])
+        polls.lost = away
+        XCTAssertEqual(polls.keys(300, through: 600), [:])
+        polls.lost = cut
+        XCTAssertEqual(polls.keys(660, through: 1200), [960: ["orch|unreachable"]])
+    }
+
+    func testChangingConditionStartsItsOwnFiveMinutes() {
+        let start = date("2026-11-26T09:16:00Z")
+        var polls = Polls(state: quietState(heartbeat: start, age: 600), startedAt: start, lost: cut)
+        XCTAssertEqual(polls.keys(0, through: 240), [:])
+        polls.lost = nil
+        XCTAssertEqual(polls.keys(300, through: 660), [600: ["orch|stale"]])
+        polls.lost = cut
+        XCTAssertEqual(polls.keys(720, through: 1500), [1020: ["orch|unreachable"]])
+    }
+
+    func testFlappingReachabilityDoesNotRepeat() {
+        let start = date("2026-11-26T09:16:00Z")
+        var polls = Polls(state: quietState(heartbeat: start, age: 600), startedAt: start, lost: cut)
+        var said: [String] = []
+        // Six minutes in each condition, over and over, then a change every poll.
+        for i in 0..<120 {
+            let long = [cut, nil, cut, away][(i / 6) % 4]
+            polls.lost = i < 96 ? long : [cut, nil, away][i % 3]
+            said += polls.at(Double(i * 60)).map(\.key)
+        }
+        XCTAssertEqual(said, ["orch|unreachable", "orch|stale"])
+    }
+
+    func testFreshStateResetsBothNotices() {
+        let start = date("2026-11-26T09:16:00Z")
+        var polls = Polls(state: quietState(heartbeat: start, age: 600), startedAt: start, lost: cut)
+        XCTAssertEqual(polls.keys(0, through: 300), [300: ["orch|unreachable"]])
+        polls.lost = nil
+        XCTAssertEqual(polls.keys(360, through: 720), [660: ["orch|stale"]])
+        polls.state = quietState(heartbeat: start.addingTimeInterval(780))
+        XCTAssertEqual(polls.at(780), [])
+        // The same state goes stale 300 s after its heartbeat; each notice is offered again, 300 s after it is first seen.
+        polls.lost = cut
+        XCTAssertEqual(polls.keys(840, through: 1440), [1440: ["orch|unreachable"]])
+        polls.lost = nil
+        XCTAssertEqual(polls.keys(1500, through: 1860), [1800: ["orch|stale"]])
+    }
+
+    /// A state whose heartbeat is `age` seconds before `now`, with nothing else to announce.
+    func quietState(heartbeat now: Date, age: TimeInterval = 0) -> OrchestratorState {
+        .init(version: 1, heartbeat: now.addingTimeInterval(-age))
+    }
+
+    func testStoppedOrchestratorStillNotifiesOnce() {
+        let start = date("2026-11-26T09:16:00Z")
+        var polls = Polls(state: quietState(heartbeat: start, age: 60), startedAt: start)
+        var said: [TimeInterval: [OrchestratorState.Notice]] = [:]
+        for t in stride(from: 0.0, through: 1800, by: 60) {
+            let due = polls.at(t)
+            if !due.isEmpty { said[t] = due }
+        }
+        // First seen stale at 300 s (heartbeat 360 s old); said after 300 s more of seeing it so.
+        XCTAssertEqual(said, [600: [.init(key: "orch|stale", title: "Orchestrator not reporting", body: "Last heartbeat 11m ago.")]])
+    }
+
+    func testWakeWithStaleHeldStateAndOneFailedReadDoesNotNotify() {
+        let start = date("2026-11-26T09:16:00Z")
+        var polls = Polls(state: quietState(heartbeat: start), startedAt: start)
+        XCTAssertEqual(polls.at(0), [])
+        XCTAssertEqual(polls.at(60), [])
+        // Four hours asleep, 5 s awake. The state read fails, so the held state is hours old.
+        XCTAssertEqual(polls.at(14_460, awake: 65), [])
+        // The next read works.
+        polls.state = quietState(heartbeat: start.addingTimeInterval(14_520))
+        XCTAssertEqual(polls.at(14_520, awake: 125), [])
+        // A later stale spell is timed from its own start.
+        for t in stride(from: 14_580.0, through: 15_060, by: 60) { XCTAssertEqual(polls.at(t, awake: t - 14_395), [], "at \(t)") }
+    }
+
+    func testTimeAsleepOrUnderFailedPollsDoesNotCount() {
+        let start = date("2026-11-26T09:16:00Z")
+        let stale = quietState(heartbeat: start, age: 600)
+        // 240 s seen stale, then a sleep longer than the allowed gap: counting starts again.
+        var slept = Polls(state: stale, startedAt: start)
+        for t in stride(from: 0.0, through: 240, by: 60) { XCTAssertEqual(slept.at(t), []) }
+        XCTAssertEqual(slept.at(3840, awake: 300), [])
+        for t in stride(from: 3900.0, to: 4140, by: 60) { XCTAssertEqual(slept.at(t, awake: t - 3540), [], "at \(t)") }
+        XCTAssertEqual(slept.at(4140, awake: 600).map(\.key), ["orch|stale"])
+        // A nap shorter than the allowed gap: only the 5 s awake count.
+        var napped = Polls(state: stale, startedAt: start)
+        for t in stride(from: 0.0, through: 240, by: 60) { XCTAssertEqual(napped.at(t), []) }
+        XCTAssertEqual(napped.at(390, awake: 245), [])
+        XCTAssertEqual(napped.at(440, awake: 295), [])
+        XCTAssertEqual(napped.at(445, awake: 300).map(\.key), ["orch|stale"])
+        // A failed poll: the interval it falls in is not counted, what was seen before it still is.
+        var failing = Polls(state: stale, startedAt: start)
+        for t in stride(from: 0.0, through: 240, by: 60) { XCTAssertEqual(failing.at(t), []) }
+        failing.announcer.pollFailed()
+        XCTAssertEqual(failing.at(360), [])
+        XCTAssertEqual(failing.at(420).map(\.key), ["orch|stale"])
+        // An outage of Hangar's own polls longer than the allowed gap: counting starts again.
+        var offline = Polls(state: stale, startedAt: start)
+        for t in stride(from: 0.0, through: 240, by: 60) { XCTAssertEqual(offline.at(t), []) }
+        offline.announcer.pollFailed()
+        XCTAssertEqual(offline.at(1200), [])
+        XCTAssertEqual(offline.at(1260), [])
+    }
+
+    func testKillsFromBeforeThisRunDoNotNotify() {
+        let start = date("2026-11-26T09:16:00Z")
+        var s = quietState(heartbeat: start)
+        func kill(_ host: String, _ offset: TimeInterval?) -> OrchestratorState.Event {
+            .init(time: offset.map(start.addingTimeInterval), kind: "memory_kill", host: host, text: "Killed for memory", attributed: true)
+        }
+        s.events = [kill("days-old", -172_800), kill("just-before", -301), kill("no-time", nil), kill("at-the-edge", -300), kill("during", 30)]
+        var polls = Polls(state: s, startedAt: start)
+        XCTAssertEqual(polls.at(60).map(\.key), ["orch|kill|2026-11-26T09:16:30Z|during", "orch|kill|2026-11-26T09:11:00Z|at-the-edge"])
+        guard case .events(_, let rows)? = OrchestratorCard.sections(state: s, seen: true, otherVersion: false, now: start).last else { return XCTFail("no events") }
+        XCTAssertEqual(rows.map(\.host), ["during", "at-the-edge", "no-time", "just-before", "days-old"], "all still on the card")
+    }
+
+    func testCardOrdersProblemsFirst() throws {
+        let now = date("2026-11-26T09:16:00Z")
+        var s = try XCTUnwrap(OrchestratorState.parse(Self.fixture()))
+        s.events = (1...7).map { .init(time: date("2026-11-26T09:10:00Z"), kind: "idle_removed", host: "box-a", text: "event \($0)") }
+        XCTAssertEqual(OrchestratorCard.sections(state: s, seen: true, otherVersion: false, now: now), [
+            .problems([.init(host: "box-a", text: "No answer over ssh", age: "16m"), .init(host: "", text: "Jobs wait and nothing runs", age: "15m")]),
+            .recommendations(["Give widgets-stack more memory"]),
+            .events(inLast24h: 12, (3...7).reversed().map { .init(host: "box-a", text: "Idle runner removed: event \($0)", age: "6m") }),
+            .typicalWait("Typical wait today 10s, previous 7 days 20s"),
+        ])
+        s.problems = nil
+        XCTAssertEqual(OrchestratorCard.sections(state: s, seen: true, otherVersion: false, now: now).first, .noProblems)
+        XCTAssertEqual(OrchestratorCard.sections(state: s, seen: true, otherVersion: false, now: date("2026-11-26T09:27:00Z")), [.notReporting("Last heartbeat 12m ago")])
+        XCTAssertEqual(OrchestratorCard.sections(state: nil, seen: true, otherVersion: false, now: now), [.notReporting("No heartbeat read since Hangar started")])
+        XCTAssertEqual(OrchestratorCard.sections(state: nil, seen: false, otherVersion: false, now: now), [], "never seen: no card")
+    }
+
+    /// The writer's text can be a bare runner name, and is the same when a problem opens and closes.
+    func testEventRowsSayWhatHappened() {
+        let now = date("2026-11-26T09:16:00Z")
+        func row(_ kind: String?, _ text: String?) -> String? {
+            var s = quietState(heartbeat: now)
+            s.events = [.init(time: now, kind: kind, host: "box-a", text: text)]
+            guard case .events(_, let rows)? = OrchestratorCard.sections(state: s, seen: true, otherVersion: false, now: now).last else { return nil }
+            return rows.first?.text
+        }
+        let labels = ["idle_removed": "Idle runner removed", "hung_release": "Hung runner released", "failed_start": "Runner failed to start",
+                      "runner_error": "Runner error", "count_mismatch": "Waiting count mismatch", "problem_opened": "Problem opened",
+                      "problem_closed": "Problem closed", "memory_kill": "Memory kill", "brand_new_kind": "brand new kind"]
+        for (kind, label) in labels {
+            XCTAssertEqual(row(kind, "widgets-1"), "\(label): widgets-1")
+            XCTAssertEqual(row(kind, ""), label)
+            XCTAssertEqual(row(kind, nil), label)
+        }
+        XCTAssertEqual(row("", "widgets-1"), "Event: widgets-1")
+        XCTAssertEqual(row(nil, ""), "Event")
+    }
+
+    func testEmptyStringsCountAsMissing() {
+        let now = date("2026-11-26T09:16:00Z")
+        var s = quietState(heartbeat: now)
+        s.problems = [.init(id: "a", host: "", class: "reach", text: ""), .init(id: "b", host: "box-a", class: "", text: "")]
+        s.recommendations = [.init(text: "")]
+        XCTAssertEqual(OrchestratorCard.sections(state: s, seen: true, otherVersion: false, now: now),
+                       [.problems([.init(host: "", text: "reach", age: ""), .init(host: "box-a", text: "Unnamed problem", age: "")])])
+        s.events = [.init(time: now, kind: "memory_kill", host: "box-a", job: "e2e", text: "", attributed: true),
+                    .init(time: now, kind: "memory_kill", host: "box-b", job: "", text: "", attributed: true)]
+        XCTAssertEqual(OrchestratorState.notices(state: s, silenceConfirmed: false, startedAt: now, now: now).map(\.body),
+                       ["reach", "box-a: Unnamed problem", "box-b: A job was killed for memory", "box-a: e2e"])
+    }
+
+    func testTypicalWaitWeightsByRuns() {
+        let now = date("2026-11-26T23:59:00Z")
+        func day(_ d: String, _ sets: [(Int, Int)]) -> OrchestratorState.Day {
+            .init(date: d, sets: Dictionary(uniqueKeysWithValues: sets.enumerated().map { ("set-\($0.offset)", .init(runs: $0.element.0, waitP50Sec: $0.element.1)) }))
+        }
+        let days = [day("2026-11-18", [(100, 999)]),                    // eight days back: not counted
+                    day("2026-11-19", [(1, 100)]), day("2026-11-25", [(3, 200), (0, 5000)]),
+                    day("2026-11-26", [(9, 10), (1, 110)])]
+        XCTAssertEqual(OrchestratorCard.waitLine(days: days, now: now), "Typical wait today 20s, previous 7 days 2m 55s")
+    }
+
+    func testNoWaitHistoryShowsNoComparison() {
+        let now = date("2026-11-26T09:16:00Z")
+        let today = OrchestratorState.Day(date: "2026-11-26", sets: ["a": .init(runs: 2, waitP50Sec: 60)])
+        XCTAssertEqual(OrchestratorCard.waitLine(days: [today], now: now), "Typical wait today 1m")
+        XCTAssertEqual(OrchestratorCard.waitLine(days: [.init(date: "2026-11-25", sets: ["a": .init(runs: 0, waitP50Sec: 0)]), today], now: now), "Typical wait today 1m")
+        XCTAssertNil(OrchestratorCard.waitLine(days: [.init(date: "2026-11-25", sets: ["a": .init(runs: 4, waitP50Sec: 9)])], now: now), "nothing for today, nothing to say")
+        XCTAssertNil(OrchestratorCard.waitLine(days: nil, now: now))
+    }
+
+    func testOneNoticePerProblem() throws {
+        let now = date("2026-11-26T09:16:00Z")
+        var s = try XCTUnwrap(OrchestratorState.parse(Self.fixture()))
+        s.events = nil
+        var polls = Polls(state: s, startedAt: now, quiet: true)
+        XCTAssertEqual(polls.at(0), [], "held in quiet hours")
+        polls.quiet = false
+        XCTAssertEqual(polls.at(0), [
+            .init(key: "orch|host:box-a:reach", title: "Orchestrator problem", body: "box-a: No answer over ssh"),
+            .init(key: "orch|nothing_running", title: "Orchestrator problem", body: "Jobs wait and nothing runs"),
+        ], "and sent when they end")
+        XCTAssertEqual(polls.at(0), [])
+        // The same file goes stale: only that is said, once.
+        XCTAssertEqual(stride(from: 60.0, through: 900, by: 60).flatMap { polls.at($0).map(\.key) }, ["orch|stale"])
+        polls.state?.heartbeat = now.addingTimeInterval(960)
+        XCTAssertEqual(polls.at(960), [], "the same open problems are not announced again after a stale spell")
+        polls.state?.problems = [s.problems![1]]
+        XCTAssertEqual(polls.at(970), [])
+        polls.state?.problems = s.problems
+        XCTAssertEqual(polls.at(980).map(\.key), ["orch|host:box-a:reach"], "reopened: offered again, subject to the cooldown")
+        // Seen before, nothing read since launch.
+        var unread = Polls(state: nil, startedAt: now)
+        for t in stride(from: 0.0, to: 300, by: 60) { XCTAssertEqual(unread.at(t), []) }
+        XCTAssertEqual(unread.at(300), [.init(key: "orch|stale", title: "Orchestrator not reporting", body: "No heartbeat read since Hangar started.")])
+        var never = Polls(state: nil, seen: false, startedAt: now)
+        for t in stride(from: 0.0, through: 900, by: 60) { XCTAssertEqual(never.at(t), []) }
+    }
+
+    func testUnattributedKillDoesNotNotify() throws {
+        let now = date("2026-11-26T09:16:00Z")
+        var s = try XCTUnwrap(OrchestratorState.parse(Self.fixture()))
+        s.problems = nil
+        let at = date("2026-11-26T09:10:00Z")
+        s.events = [.init(time: at, kind: "memory_kill", host: "box-a", text: "not tied to a job", attributed: false),
+                    .init(time: at, kind: "memory_kill", host: "box-b", text: "no flag"),
+                    .init(time: at, kind: "failed_start", host: "box-a", text: "another kind", attributed: true),
+                    .init(time: at, kind: "memory_kill", host: "box-c", text: "Killed for memory", attributed: true)]
+        var polls = Polls(state: s, startedAt: at)
+        XCTAssertEqual(polls.at(now.timeIntervalSince(at)),
+                       [.init(key: "orch|kill|2026-11-26T09:10:00Z|box-c", title: "Job killed for memory", body: "box-c: Killed for memory")])
+    }
+}
+
+final class ThroughputTests: XCTestCase {
+    typealias Bucket = OrchestratorState.Bucket
+    typealias Failure = OrchestratorState.Failure
+
+    func date(_ s: String) -> Date { ISO8601DateFormatter().date(from: s)! }
+    /// Four minutes into the 09:15 bucket.
+    var heartbeat: Date { date("2026-11-26T09:19:00Z") }
+
+    /// A bucket `back` places before the one holding the heartbeat.
+    func bucket(_ back: Int, completed: Int = 0, failed: Int = 0, running: Int = 0, waiting: Int = 0) -> Bucket {
+        Bucket(start: date("2026-11-26T09:15:00Z").addingTimeInterval(Double(-300 * back)),
+               completed: completed, failed: failed, running: running, waiting: waiting)
+    }
+
+    func summary(_ buckets: [Bucket]?, failures: [Failure]? = nil, days: [OrchestratorState.Day]? = nil,
+                 steps: [RunnerJobKey: String] = [:], after: TimeInterval = 30) -> OrchestratorState.Throughput? {
+        OrchestratorState(version: 1, heartbeat: heartbeat, throughput: buckets, failures: failures, days: days)
+            .throughputSummary(failedSteps: steps, now: heartbeat.addingTimeInterval(after))
+    }
+
+    func failure(_ job: String, run: Int?, runner: String = "stack-1", at minute: Int, fault: String = "") -> Failure {
+        Failure(time: date("2026-11-26T09:00:00Z").addingTimeInterval(Double(minute * 60)), set: "stack", repo: "widgets",
+                job: job, jobId: "j-\(job)", runner: runner, runId: run, fault: fault)
+    }
+
+    func testFailuresGroupByRun() throws {
+        let s = try XCTUnwrap(summary([], failures: [failure("unit", run: 7, at: 1), failure("lint", run: 8, at: 2),
+                                                     failure("report", run: 7, at: 3), failure("status", run: 7, at: 4)]))
+        XCTAssertEqual(s.failures.map(\.job), ["lint", "unit"], "newest run first, each named by its earliest job")
+        XCTAssertEqual(s.failures.map(\.more), [0, 2])
+        XCTAssertEqual(s.failureTotal, 2)
+        XCTAssertEqual(s.failures.last?.time, date("2026-11-26T09:01:00Z"))
+        let many = try XCTUnwrap(summary([], failures: (1...8).map { failure("job-\($0)", run: $0, at: $0) }))
+        XCTAssertEqual(many.failures.map(\.job), ["job-8", "job-7", "job-6", "job-5", "job-4", "job-3"])
+        XCTAssertEqual(many.failureTotal, 8)
+    }
+
+    func testRunIdZeroDoesNotGroup() throws {
+        let s = try XCTUnwrap(summary([], failures: [failure("a", run: 0, at: 1), failure("b", run: 0, at: 2),
+                                                     failure("c", run: nil, at: 3), failure("d", run: nil, at: 4)],
+                                      steps: [.init(runId: 0, runner: "stack-1"): "never shown"]))
+        XCTAssertEqual(s.failures.map(\.job), ["d", "c", "b", "a"])
+        XCTAssertEqual(s.failures.map(\.more), [0, 0, 0, 0])
+        XCTAssertEqual(s.failures.map(\.detail), ["", "", "", ""])
+    }
+
+    // With the heartbeat at 09:19, the tile's six hours start with the 03:20 bucket: 340 minutes before 09:00.
+    func testFailuresOlderThanSixHoursAreLeftOut() throws {
+        let s = try XCTUnwrap(summary([bucket(71, failed: 1), bucket(72, failed: 1)],
+                                      failures: [failure("days-old", run: 1, at: -3000), failure("just-outside", run: 2, at: -341),
+                                                 failure("at-the-edge", run: 3, at: -340), failure("recent", run: 4, at: 5),
+                                                 Failure(job: "no-time", runId: 5)]))
+        XCTAssertEqual(s.failed6h, 1)
+        XCTAssertEqual(s.failures.map(\.job), ["recent", "at-the-edge"])
+        XCTAssertEqual(s.failureTotal, 2)
+        // Five older runs must not fill the list or the count.
+        let many = try XCTUnwrap(summary([], failures: (1...19).map { failure("old-\($0)", run: $0, at: -1000 + $0) } + [failure("new", run: 50, at: 1)]))
+        XCTAssertEqual(many.failures.map(\.job), ["new"])
+        XCTAssertEqual(many.failureTotal, 1)
+    }
+
+    func testNoFailureInSixHours() throws {
+        let old = try XCTUnwrap(summary([bucket(0)], failures: [failure("old", run: 1, at: -3000)]))
+        XCTAssertEqual(old.failures, [])
+        XCTAssertEqual(old.failureTotal, 0, "the section stays, to say there were none in the six hours")
+        XCTAssertEqual(try XCTUnwrap(summary([], failures: [])).failureTotal, 0)
+        XCTAssertNil(try XCTUnwrap(summary([], failures: nil)).failureTotal, "no list in the file: nothing can be said")
+    }
+
+    func testRunStraddlingSixHours() throws {
+        let s = try XCTUnwrap(summary([], failures: [failure("before", run: 7, at: -345, fault: "memory_kill"), failure("other", run: 8, at: -300),
+                                                     failure("inside", run: 7, at: 2), failure("report", run: 7, at: 3)]))
+        XCTAssertEqual(s.failures.map(\.job), ["inside", "other"], "named, timed and ordered by its first job inside the six hours")
+        XCTAssertEqual(s.failures.first?.time, date("2026-11-26T09:02:00Z"))
+        XCTAssertEqual(s.failures.first?.more, 2, "every other failed job of the run that the file keeps, the older one too")
+        XCTAssertEqual(s.failures.first?.detail, "Out of memory (another job)")
+        XCTAssertEqual(s.failureTotal, 2)
+    }
+
+    func testTileCountsRunsNotJobs() throws {
+        // Three failed jobs of one run: the bucket counts the run once.
+        let s = try XCTUnwrap(summary([bucket(1, completed: 3, failed: 1), bucket(0, completed: 1, failed: 0)],
+                                      failures: [failure("a", run: 7, at: 11), failure("b", run: 7, at: 12), failure("c", run: 7, at: 13)]))
+        XCTAssertEqual(s.failed6h, 1)
+        XCTAssertEqual(s.points.map(\.failed), [1, 0])
+        XCTAssertEqual(s.doneLastHour, 4)
+    }
+
+    func testDoneLastHourSumsTwelve() throws {
+        let s = try XCTUnwrap(summary((0..<20).reversed().map { bucket($0, completed: 1, running: $0 + 2, waiting: $0 + 1) }))
+        XCTAssertEqual(s.doneLastHour, 12)
+        XCTAssertEqual(s.runningNow, 2)
+        XCTAssertEqual(s.waitingNow, 1)
+        XCTAssertEqual(s.points.count, 20)
+    }
+
+    func testWindowsUseTimeNotCount() throws {
+        // Gaps and old buckets: six entries, of which the last twelve-by-count would take them all.
+        let s = try XCTUnwrap(summary([bucket(100, completed: 1000, failed: 1000), bucket(72, completed: 500, failed: 500),
+                                       bucket(71, completed: 100, failed: 4), bucket(12, completed: 50, failed: 2),
+                                       bucket(11, completed: 7), bucket(2, completed: 2, failed: 1, running: 3, waiting: 4)]))
+        XCTAssertEqual(s.doneLastHour, 9)
+        XCTAssertEqual(s.failed6h, 7)
+        XCTAssertEqual(s.points.map(\.completed), [100, 50, 7, 2])
+        XCTAssertEqual(s.points.map(\.segment), [0, 1, 1, 2])
+        XCTAssertNil(s.runningNow, "no bucket for the heartbeat's own five minutes")
+        XCTAssertNil(s.waitingNow)
+        XCTAssertEqual(s.domain, date("2026-11-26T03:20:00Z")...date("2026-11-26T09:20:00Z"))
+        // Only buckets from long ago: nothing is passed off as current.
+        let old = try XCTUnwrap(summary([bucket(200, completed: 5, running: 5)]))
+        XCTAssertEqual(old.points, [])
+        XCTAssertNil(old.doneLastHour); XCTAssertNil(old.failed6h); XCTAssertNil(old.runningNow)
+    }
+
+    func testStaleStateHidesCard() {
+        XCTAssertNotNil(summary([bucket(0)], after: 300))
+        XCTAssertNil(summary([bucket(0)], after: 301))
+    }
+
+    func testStepNameWhenSeen() throws {
+        func job(_ id: Int, run: Int, runner: String?, conclusion: String?, steps: [(String?, String)]) -> GHJob {
+            GHJob(id: id, runId: run, repo: "widgets", workflow: "CI", runNumber: 1, branch: "main", status: "completed",
+                  conclusion: conclusion, labels: [], runnerName: runner, createdAt: heartbeat, startedAt: nil, completedAt: nil,
+                  steps: steps.enumerated().map { .init(number: $0.offset + 1, status: "completed", conclusion: $0.element.0, name: $0.element.1) })
+        }
+        let steps = LiveBackend.failedSteps(jobs: [
+            job(1, run: 7, runner: "stack-1", conclusion: "failure", steps: [("success", "Check out"), ("failure", "Run unit tests"), ("failure", "Upload")]),
+            job(2, run: 7, runner: "stack-2", conclusion: "success", steps: [("failure", "Allowed to fail")]),
+            job(3, run: 8, runner: nil, conclusion: "failure", steps: [("failure", "No runner")]),
+            job(4, run: 9, runner: "stack-3", conclusion: "failure", steps: [("failure", "")]),
+        ])
+        XCTAssertEqual(steps, [.init(runId: 7, runner: "stack-1"): "Run unit tests"])
+        let s = try XCTUnwrap(summary([], failures: [failure("unit", run: 7, at: 1)], steps: steps))
+        XCTAssertEqual(s.failures.map(\.detail), ["Run unit tests"])
+        let both = try XCTUnwrap(summary([], failures: [failure("unit", run: 7, at: 1, fault: "runner_error")], steps: steps))
+        XCTAssertEqual(both.failures.map(\.detail), ["Runner fault: runner error · Run unit tests"])
+    }
+
+    func testNoStepNameWhenNotSeen() throws {
+        let steps: [RunnerJobKey: String] = [.init(runId: 7, runner: "stack-2"): "Other runner", .init(runId: 8, runner: "stack-1"): "Other run"]
+        let s = try XCTUnwrap(summary([], failures: [failure("unit", run: 7, at: 1)], steps: steps))
+        XCTAssertEqual(s.failures.map(\.detail), [""])
+        // A later job of the run does not lend its step to the earliest one.
+        let later = try XCTUnwrap(summary([], failures: [failure("unit", run: 7, at: 1), failure("report", run: 7, runner: "stack-2", at: 2)], steps: steps))
+        XCTAssertEqual(later.failures.map(\.detail), [""])
+    }
+
+    func testFaultLabel() throws {
+        XCTAssertEqual(OrchestratorState.faultLabel("memory_kill"), "Out of memory")
+        XCTAssertEqual(OrchestratorState.faultLabel("failed_start"), "Runner fault: failed start")
+        XCTAssertEqual(OrchestratorState.faultLabel("hung_release"), "Runner fault: hung release")
+        XCTAssertEqual(OrchestratorState.faultLabel("something_new"), "Runner fault: something new")
+        XCTAssertNil(OrchestratorState.faultLabel(""))
+        XCTAssertNil(OrchestratorState.faultLabel(nil))
+        // A fault on a later job of the run is not lost, nor pinned on the job named.
+        let s = try XCTUnwrap(summary([], failures: [failure("unit", run: 7, at: 1), failure("report", run: 7, at: 2, fault: "memory_kill")]))
+        XCTAssertEqual(s.failures.map(\.detail), ["Out of memory (another job)"])
+    }
+
+    func testNoThroughputHidesCard() throws {
+        XCTAssertNil(summary(nil, failures: [failure("unit", run: 7, at: 1)]))
+        XCTAssertNil(try XCTUnwrap(OrchestratorState.parse(#"{"version":1,"heartbeat":"2026-11-26T09:19:00Z"}"#)).throughputSummary(failedSteps: [:], now: heartbeat))
+        let empty = try XCTUnwrap(summary([]), "an empty array still has a card")
+        XCTAssertNil(empty.doneLastHour); XCTAssertNil(empty.typicalWait); XCTAssertEqual(empty.failures, [])
+    }
+
+    func testTypicalWaitIsTodays() throws {
+        let days = [OrchestratorState.Day(date: "2026-11-25", sets: ["a": .init(runs: 4, waitP50Sec: 90)])]
+        XCTAssertNil(try XCTUnwrap(summary([], days: days)).typicalWait, "yesterday's is not today's")
+        let today = days + [.init(date: "2026-11-26", sets: ["a": .init(runs: 4, waitP50Sec: 75)])]
+        XCTAssertEqual(try XCTUnwrap(summary([], days: today)).typicalWait, "1m 15s")
+    }
+
+    func testHostileValues() throws {
+        let one = try XCTUnwrap(summary([bucket(0, completed: .max, failed: -5, running: .min, waiting: .max),
+                                         bucket(1, completed: .max), Bucket(), bucket(-3, completed: 9),
+                                         bucket(1, completed: 2)]))
+        XCTAssertEqual(one.points.map(\.completed), [2, 1_000_000], "sorted; a repeated start keeps the last; no start or a future one is dropped")
+        XCTAssertEqual(one.points.last?.failed, 0)
+        XCTAssertEqual(one.runningNow, 0)
+        XCTAssertEqual(one.waitingNow, 1_000_000)
+        XCTAssertEqual(one.doneLastHour, 1_000_002)
+    }
+
+    func testChartHoverAndSpokenText() throws {
+        let points = try XCTUnwrap(summary([bucket(3, completed: 4), bucket(1, completed: 1), bucket(0, completed: 2)])).points
+        let time = { (d: Date) in d.formatted(date: .omitted, time: .shortened) }
+        XCTAssertEqual(OrchestratorState.hoverText(at: date("2026-11-26T09:13:00Z"), points: points, value: \.completed),
+                       "\(time(date("2026-11-26T09:10:00Z"))) · 1")
+        XCTAssertEqual(OrchestratorState.hoverText(at: date("2026-11-26T09:07:00Z"), points: points, value: \.completed),
+                       "\(time(date("2026-11-26T09:05:00Z"))) · no data")
+        XCTAssertEqual(OrchestratorState.spoken("Jobs completed", points: points, value: \.completed), "Jobs completed: latest 2, peak 4")
+        XCTAssertEqual(OrchestratorState.spoken("Jobs waiting", points: [], value: \.waiting), "Jobs waiting: no data")
+    }
+}

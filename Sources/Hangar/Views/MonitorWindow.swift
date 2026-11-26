@@ -18,8 +18,14 @@ struct MonitorWindow: View {
                     header(now: ctx.date)
                     // What is running and waiting comes first: with many runner cards below, the window scrolls, and the work in
                     // progress must not be the part that scrolls out of sight.
+                    let orchestrator = OrchestratorCard.sections(state: store.orchestrator, seen: store.orchestratorSeen,
+                                                                 otherVersion: store.orchestratorOtherVersion, lost: store.orchestratorLost,
+                                                                 now: ctx.date)
+                    if !orchestrator.isEmpty { OrchestratorCard(parts: orchestrator) }
                     if !store.onDemand.isEmpty { OnDemandCard(runners: store.onDemand, now: ctx.date) }
                     UpNextCard(queue: store.queue, now: ctx.date)
+                    // Tall, so it sits below the work in progress.
+                    if let t = store.orchestrator?.throughputSummary(failedSteps: store.failedSteps, now: ctx.date) { ThroughputCard(summary: t) }
                     // A Grid (not a lazy one) so the cards in a row share the tallest card's height.
                     Grid(horizontalSpacing: 10, verticalSpacing: 10) {
                         ForEach(Array(store.runners.chunked(into: 3).enumerated()), id: \.offset) { _, row in

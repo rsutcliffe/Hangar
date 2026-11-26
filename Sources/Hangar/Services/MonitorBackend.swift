@@ -7,8 +7,16 @@ struct OnDemandFailure: Sendable {
     var failedAt: Date
 }
 
+/// What ties one of the orchestrator's failures to a job read from GitHub.
+struct RunnerJobKey: Hashable, Sendable {
+    var runId: Int
+    var runner: String
+}
+
 struct BackendSnapshot: Sendable {
     var onDemandFailures: [OnDemandFailure] = []
+    /// The first failed step's name, for each failed job read this poll that has one.
+    var failedSteps: [RunnerJobKey: String] = [:]
     var runners: [RunnerObservation]
     var queue: [QueuedJob]
     /// Live runners the orchestrator started for single jobs; they have no folder on any host, so they come from GitHub's list.
@@ -24,6 +32,15 @@ struct BackendSnapshot: Sendable {
     /// Latest actions/runner release (e.g. "2.338.0"), if known.
     var latestRunner: String? = nil
     var latestRunnerPublished: Date? = nil
+    /// The orchestrator's last good state since launch; nil when none has been read. It may be stale (`isStale`).
+    var orchestrator: OrchestratorState? = nil
+    /// The host that last supplied a state, remembered across launches. Set while `orchestrator` is nil means the
+    /// orchestrator was seen before and has not reported since launch; nil means it has never been seen.
+    var orchestratorSeenOn: String? = nil
+    /// This poll read a state file of a version Hangar does not know.
+    var orchestratorOtherVersion = false
+    /// Set when this poll did not reach the remote Mac in `orchestratorSeenOn`.
+    var orchestratorLost: OrchestratorState.Lost? = nil
 }
 
 /// Source of raw facts and the place side effects happen. Live = GitHub + Colima, Demo = scripted.
@@ -46,6 +63,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
     private var located: [String: Place] = [:]          // runner name -> where it lives
     private var permissionHint = false
     private var labels: [String: String] = [:]          // host target -> label from the last successful probe
+    private var orchestrator = OrchestratorState.Held.remembered(in: .standard)      // the last good state and who supplied it
 
     struct Place: Sendable { var host: HostSpec; var profile: String?; var dir: String }
 
@@ -70,10 +88,13 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         var warnings: [String] = []
         var unreachable: [String] = []
         var hostOf: [String: String] = [:]                  // on-demand runner name -> the Mac whose orchestrator VM runs it
+        var stateReads: [OrchestratorState.Read] = []
         self.lock.withLock { self.permissionHint = false }
-        await withTaskGroup(of: ([Machine], String?, String?, [String: String]).self) { group in
+        await withTaskGroup(of: ([Machine], String?, String?, [String: String], OrchestratorState.Read).self) { group in
             for h in config.hosts.map(HostSpec.init) {
                 group.addTask {
+                    // Read alongside the probe, so it lengthens the poll only when it is slower than the whole probe.
+                    async let stateText = hosts.orchestratorState(h)
                     var out: [Machine] = []
                     var hostname = ""
                     var reached = false
@@ -100,7 +121,9 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                     hostMemory?.vmCommittedGB = committed
                     out = out.map { var m = $0; m.label = label; m.hostMemory = hostMemory; return m }
                     if reached, let t = h.target { self.lock.withLock { self.labels[t] = label } }
-                    let down = reached ? nil : (h.target.flatMap { t in self.lock.withLock { self.labels[t] } } ?? h.target ?? "this Mac")
+                    let reported = Self.reportedLabel(reached: reached, label: label, target: h.target,
+                                                      cached: h.target.flatMap { t in self.lock.withLock { self.labels[t] } })
+                    let down = reached ? nil : reported
                     var warning: String?
                     var perm = false
                     if !reached {
@@ -114,13 +137,20 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                     for p in SnapshotParser.orchestratorProfiles(in: vmsOrNil ?? [:]) {
                         for n in await hosts.onDemandNames(h, profile: p) { here[n] = label }
                     }
-                    return (out, warning, down, here)
+                    return (out, warning, down, here, OrchestratorState.Read(target: h.target ?? "local", host: reported, text: await stateText, reached: reached))
                 }
             }
-            for await (m, w, down, here) in group {
+            for await (m, w, down, here, state) in group {
                 machines += m; if let w { warnings.append(w) }; if let down { unreachable.append(down) }
                 hostOf.merge(here) { a, _ in a }
+                stateReads.append(state)
             }
+        }
+        // Kept before the GitHub calls, so a poll they fail does not lose what was read.
+        let orchestrator = lock.withLock {
+            self.orchestrator = self.orchestrator.updated(with: stateReads, hosts: config.hosts, now: Date())
+            self.orchestrator.remember(in: .standard)
+            return self.orchestrator
         }
 
         // Repos seen before still count when their runner VM is stopped (see RepoMemory).
@@ -164,6 +194,10 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
             return (allR, allJ, allW)
         }
         var snap = Self.assemble(machines: machines, runners: runners, jobs: jobs, now: Date(), hostOf: hostOf)
+        snap.orchestrator = orchestrator.state
+        snap.orchestratorSeenOn = orchestrator.host
+        snap.orchestratorOtherVersion = orchestrator.otherVersion
+        snap.orchestratorLost = orchestrator.lost
         snap.warnings = (warnings + repoWarnings).sorted()
         snap.unreachable = unreachable.sorted()
         snap.tokenExpiry = await github.tokenExpiry()
@@ -213,6 +247,12 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         }
         if repos.isEmpty { report.lines.append(.init(ok: false, text: "No repos discovered, so the token could not be checked.")) }
         return report
+    }
+
+    /// The name a host goes by this poll. One that was not reached keeps its name from the last successful probe, else its
+    /// configured entry.
+    static func reportedLabel(reached: Bool, label: String, target: String?, cached: String?) -> String {
+        reached ? label : cached ?? target ?? "this Mac"
     }
 
     private static func reason(_ e: Error, fallback: String = "failed") -> String {
@@ -280,6 +320,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         }
         var snap = BackendSnapshot(runners: obs, queue: queue(from: jobs, runners: runners))
         snap.onDemandFailures = onDemandFailures(jobs: jobs, now: now)
+        snap.failedSteps = failedSteps(jobs: jobs)
         snap.onDemand = onDemandRunners(runners: runners, jobs: jobs, known: Set(machines.flatMap { $0.snap.runners }.map { "\($0.repo)/\($0.name)" }), hostOf: hostOf)
         return snap
     }
@@ -306,6 +347,16 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                   seen.insert(j.id).inserted else { return nil }
             return OnDemandFailure(set: set, job: activeJob(j, lastOutput: done), failedAt: done)
         }.sorted { $0.failedAt < $1.failedAt }
+    }
+
+    static func failedSteps(jobs: [GHJob]) -> [RunnerJobKey: String] {
+        var out: [RunnerJobKey: String] = [:]
+        for j in jobs where j.conclusion == "failure" {
+            guard let runner = j.runnerName, !runner.isEmpty,
+                  let step = j.steps.first(where: { $0.conclusion == "failure" })?.name, !step.isEmpty else { continue }
+            out[RunnerJobKey(runId: j.runId, runner: runner)] = step
+        }
+        return out
     }
 
     /// The keys of jobs whose newest completed run on this runner succeeded. Only the newest counts: a success older than a failure
