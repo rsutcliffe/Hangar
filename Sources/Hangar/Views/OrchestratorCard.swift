@@ -29,15 +29,25 @@ struct OrchestratorCard: View {
             if let state { return [.notReporting("Last heartbeat \(age(state.heartbeat)) ago")] }
             return seen ? [.notReporting("No heartbeat read since Hangar started")] : []
         }
-        let problems = (state.problems ?? []).map { Row(host: $0.host ?? "", text: $0.text ?? $0.class ?? "Unnamed problem", age: age($0.since)) }
+        let problems = (state.problems ?? []).map { Row(host: $0.host ?? "", text: $0.summary, age: age($0.since)) }
         var parts: [Part] = [problems.isEmpty ? .noProblems : .problems(problems)]
-        let advice = (state.recommendations ?? []).compactMap(\.text)
+        let advice = (state.recommendations ?? []).compactMap(\.text.nonEmpty)
         if !advice.isEmpty { parts.append(.recommendations(advice)) }
         // The file lists events newest last; the card shows the newest first.
-        let events = (state.events ?? []).suffix(5).reversed().map { Row(host: $0.host ?? "", text: $0.text ?? $0.kind ?? "Event", age: age($0.time)) }
+        let events = (state.events ?? []).suffix(5).reversed().map { Row(host: $0.host ?? "", text: eventText($0), age: age($0.time)) }
         if !events.isEmpty || state.eventsTotal24h != nil { parts.append(.events(inLast24h: state.eventsTotal24h, events)) }
         if let line = waitLine(days: state.days, now: now) { parts.append(.typicalWait(line)) }
         return parts
+    }
+
+    /// What happened, then the writer's text: on its own that can be a bare runner name, and it is the same when a problem
+    /// opens and closes.
+    private nonisolated static func eventText(_ event: OrchestratorState.Event) -> String {
+        let labels = ["idle_removed": "Idle runner removed", "hung_release": "Hung runner released", "failed_start": "Runner failed to start",
+                      "runner_error": "Runner error", "count_mismatch": "Waiting count mismatch", "problem_opened": "Problem opened",
+                      "problem_closed": "Problem closed", "memory_kill": "Memory kill"]
+        let label = event.kind.nonEmpty.map { labels[$0] ?? $0.replacingOccurrences(of: "_", with: " ") } ?? "Event"
+        return event.text.nonEmpty.map { "\(label): \($0)" } ?? label
     }
 
     /// "Typical wait" is the runs-weighted mean of each set's `waitP50Sec`, so it is not a median of all jobs. Days are UTC

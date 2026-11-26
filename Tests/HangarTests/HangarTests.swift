@@ -1969,7 +1969,7 @@ final class OrchestratorStateTests: XCTestCase {
         XCTAssertEqual(OrchestratorCard.sections(state: s, seen: true, otherVersion: false, now: now), [
             .problems([.init(host: "box-a", text: "No answer over ssh", age: "16m"), .init(host: "", text: "Jobs wait and nothing runs", age: "15m")]),
             .recommendations(["Give widgets-stack more memory"]),
-            .events(inLast24h: 12, (3...7).reversed().map { .init(host: "box-a", text: "event \($0)", age: "6m") }),
+            .events(inLast24h: 12, (3...7).reversed().map { .init(host: "box-a", text: "Idle runner removed: event \($0)", age: "6m") }),
             .typicalWait("Typical wait today 10s, previous 7 days 20s"),
         ])
         s.problems = nil
@@ -1977,6 +1977,40 @@ final class OrchestratorStateTests: XCTestCase {
         XCTAssertEqual(OrchestratorCard.sections(state: s, seen: true, otherVersion: false, now: date("2026-11-26T09:27:00Z")), [.notReporting("Last heartbeat 12m ago")])
         XCTAssertEqual(OrchestratorCard.sections(state: nil, seen: true, otherVersion: false, now: now), [.notReporting("No heartbeat read since Hangar started")])
         XCTAssertEqual(OrchestratorCard.sections(state: nil, seen: false, otherVersion: false, now: now), [], "never seen: no card")
+    }
+
+    /// The writer's text can be a bare runner name, and is the same when a problem opens and closes.
+    func testEventRowsSayWhatHappened() {
+        let now = date("2026-11-26T09:16:00Z")
+        func row(_ kind: String?, _ text: String?) -> String? {
+            var s = quietState(heartbeat: now)
+            s.events = [.init(time: now, kind: kind, host: "box-a", text: text)]
+            guard case .events(_, let rows)? = OrchestratorCard.sections(state: s, seen: true, otherVersion: false, now: now).last else { return nil }
+            return rows.first?.text
+        }
+        let labels = ["idle_removed": "Idle runner removed", "hung_release": "Hung runner released", "failed_start": "Runner failed to start",
+                      "runner_error": "Runner error", "count_mismatch": "Waiting count mismatch", "problem_opened": "Problem opened",
+                      "problem_closed": "Problem closed", "memory_kill": "Memory kill", "brand_new_kind": "brand new kind"]
+        for (kind, label) in labels {
+            XCTAssertEqual(row(kind, "widgets-1"), "\(label): widgets-1")
+            XCTAssertEqual(row(kind, ""), label)
+            XCTAssertEqual(row(kind, nil), label)
+        }
+        XCTAssertEqual(row("", "widgets-1"), "Event: widgets-1")
+        XCTAssertEqual(row(nil, ""), "Event")
+    }
+
+    func testEmptyStringsCountAsMissing() {
+        let now = date("2026-11-26T09:16:00Z")
+        var s = quietState(heartbeat: now)
+        s.problems = [.init(id: "a", host: "", class: "reach", text: ""), .init(id: "b", host: "box-a", class: "", text: "")]
+        s.recommendations = [.init(text: "")]
+        XCTAssertEqual(OrchestratorCard.sections(state: s, seen: true, otherVersion: false, now: now),
+                       [.problems([.init(host: "", text: "reach", age: ""), .init(host: "box-a", text: "Unnamed problem", age: "")])])
+        s.events = [.init(time: now, kind: "memory_kill", host: "box-a", job: "e2e", text: "", attributed: true),
+                    .init(time: now, kind: "memory_kill", host: "box-b", job: "", text: "", attributed: true)]
+        XCTAssertEqual(OrchestratorState.notices(state: s, silenceConfirmed: false, startedAt: now, now: now).map(\.body),
+                       ["reach", "box-a: Unnamed problem", "box-b: A job was killed for memory", "box-a: e2e"])
     }
 
     func testTypicalWaitWeightsByRuns() {
@@ -2075,7 +2109,7 @@ final class ThroughputTests: XCTestCase {
         XCTAssertEqual(s.failureTotal, 2)
         XCTAssertEqual(s.failures.last?.time, date("2026-11-26T09:01:00Z"))
         let many = try XCTUnwrap(summary([], failures: (1...8).map { failure("job-\($0)", run: $0, at: $0) }))
-        XCTAssertEqual(many.failures.map(\.job), ["job-8", "job-7", "job-6", "job-5", "job-4"])
+        XCTAssertEqual(many.failures.map(\.job), ["job-8", "job-7", "job-6", "job-5", "job-4", "job-3"])
         XCTAssertEqual(many.failureTotal, 8)
     }
 

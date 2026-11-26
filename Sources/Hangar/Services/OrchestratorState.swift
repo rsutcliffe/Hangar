@@ -24,6 +24,8 @@ struct OrchestratorState: Codable, Equatable, Sendable {
         var `class`: String? = nil
         var text: String? = nil
         var since: Date? = nil
+
+        var summary: String { text.nonEmpty ?? self.class.nonEmpty ?? "Unnamed problem" }
     }
 
     struct Event: Codable, Equatable, Sendable {
@@ -181,7 +183,7 @@ extension OrchestratorState {
         }
         func body(_ host: String?, _ text: String) -> String { (host ?? "").isEmpty ? text : "\(host ?? ""): \(text)" }
         let problems = (state.problems ?? []).compactMap { p in
-            p.id.map { Notice(key: "orch|\($0)", title: "Orchestrator problem", body: body(p.host, p.text ?? p.class ?? "Unnamed problem")) }
+            p.id.map { Notice(key: "orch|\($0)", title: "Orchestrator problem", body: body(p.host, p.summary)) }
         }
         // Older kills stay on the card only: announced again at every launch, they would crowd out newer alerts.
         let earliest = startedAt.addingTimeInterval(-staleAfter)
@@ -190,10 +192,15 @@ extension OrchestratorState {
             $0.kind == "memory_kill" && $0.attributed == true && $0.time.map { $0 >= earliest } == true
         }.map { e in
             Notice(key: "orch|kill|\(e.time.map { $0.formatted(.iso8601) } ?? "")|\(e.host ?? "")", title: "Job killed for memory",
-                   body: body(e.host, e.text ?? e.job ?? "A job was killed for memory"))
+                   body: body(e.host, e.text.nonEmpty ?? e.job.nonEmpty ?? "A job was killed for memory"))
         }
         return problems + kills
     }
+}
+
+extension String? {
+    /// The writer sends "" for a field it has nothing for.
+    var nonEmpty: String? { self?.isEmpty == false ? self : nil }
 }
 
 /// What the throughput card shows, worked out from the state file.
@@ -283,7 +290,7 @@ extension OrchestratorState {
         let jobsOfRun = Dictionary(grouping: all.filter { ($0.runId ?? 0) != 0 }) { $0.runId ?? 0 }
         var listed = Set<Int>()
         let runs = all.filter(inSpan).filter { f in (f.runId ?? 0) == 0 || listed.insert(f.runId ?? 0).inserted }
-        let entries = runs.reversed().prefix(5).map { first in
+        let entries = runs.reversed().prefix(6).map { first in
             let jobs = jobsOfRun[first.runId ?? 0] ?? [first]
             var detail: [String] = []
             if let label = Self.faultLabel(first.fault) { detail.append(label) }

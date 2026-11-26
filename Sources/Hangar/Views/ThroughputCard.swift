@@ -58,7 +58,8 @@ struct ThroughputCard: View {
                 if total > 0 {
                     Text("latest \(summary.failures.count) of \(total)").font(.system(size: 11)).monospacedDigit()
                         .foregroundStyle(Theme.muted)
-                        .help("The orchestrator keeps only its last 20 failed jobs, so this count can be below “Failed, 6 hours”")
+                        .help("The orchestrator keeps only its last 20 failed jobs, so this count can be below “Failed, 6 hours”. "
+                              + "A run that first failed earlier is listed here but not counted there.")
                 }
             }
             if total == 0 { Text("None in the last 6 hours").font(.system(size: 11)).foregroundStyle(Theme.muted) }
