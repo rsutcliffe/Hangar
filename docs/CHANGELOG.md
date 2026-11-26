@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.23 - 2026-11-26
+
+- "Typical wait" no longer shows 0s when the orchestrator has recorded no wait times. The Throughput card shows a dash, and the Orchestrator card leaves the line out. The missing wait times themselves are not fixed by this release.
+
 ## 0.1.22 - 2026-11-26
 
 - If you run the runner orchestrator, the window now has a card for it above the on-demand runners. It shows the open problems and how long each has lasted, the latest five events, each labelled with what happened, with the number in the last 24 hours, and the typical wait today against the previous 7 days. Recommendations will show there too; the orchestrator starts sending them with a later orchestrator update. The typical wait is an average of each runner set's median wait, weighted by its number of runs. Days are counted in UTC. Hangar reads the orchestrator's state file from this Mac or, over SSH, from the other Macs it already watches. The card says when the orchestrator has stopped reporting, and when Hangar needs updating to read its file. It does not appear if no orchestrator has been seen.
