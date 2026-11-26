@@ -210,7 +210,12 @@ final class MonitorStore {
         if recordHistory {
             let longest = queue.map { now.timeIntervalSince($0.queuedAt) }.max() ?? 0
             utilisation.record(at: now, runners: out.filter { $0.state != .unreachable }.map { ($0.id, $0.job != nil && ($0.state == .running || $0.state == .stalled)) },
-                               queueLength: queue.count, longestWait: longest)
+                               queueLength: queue.count, longestWait: longest,
+                               longestWaitJob: queue.min { $0.queuedAt < $1.queuedAt }.map { "\($0.repo) · \($0.workflow) / \($0.job)" },
+                               onDemand: UtilisationLog.onDemandKeys(snap.onDemand))
+            for f in Self.record(snap.onDemandFailures, into: &failures, now: now) {
+                notifier.notify(.failed, jobId: f.job.id, runner: f.set, job: f.job, silentMinutes: 0)
+            }
             if Int(now.timeIntervalSince1970) / 60 % 5 == 0 || utilisation.hours.count <= 1 { utilisation.save() }
         }
         if recordHistory {                                       // written when they change, not on every poll
@@ -225,6 +230,18 @@ final class MonitorStore {
         NSApplication.shared.dockTile.badgeLabel = ProblemBadge.label(problems)
         notifier.setBadge(problems)
         UserDefaults.standard.set(lastActive.mapValues(\.timeIntervalSince1970), forKey: "lastActive")
+    }
+
+    /// Adds on-demand failures to the list, under the set's name, and returns those to notify about: new ones that are not
+    /// the same job failing again (the same rule as for runners with cards).
+    static func record(_ found: [OnDemandFailure], into log: inout FailureLog, now: Date) -> [OnDemandFailure] {
+        found.filter { f in
+            let j = f.job
+            let record = FailureRecord(jobID: j.id, runner: f.set, repo: j.repo, workflow: j.workflow, job: j.jobName,
+                                       stepName: j.failedStepName, stepNumber: j.failedStep, at: f.failedAt, url: j.url?.absoluteString)
+            let repeated = log.isRepeat(record)
+            return log.record(record, now: now) && !repeated
+        }
     }
 
     /// Keeps a Mac under memory pressure to the job it is already running. See ThrottleRule.
