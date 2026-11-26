@@ -115,15 +115,26 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
             }
         }
 
+        // Repos seen before still count when their runner VM is stopped (see RepoMemory).
+        let found = Set(machines.flatMap { $0.snap.runners }.map { RepoRef(owner: $0.owner, repo: $0.repo) })
+        let repos = RepoMemory.merge(found: found, remembered: (UserDefaults.standard.stringArray(forKey: RepoMemory.key) ?? []) + RepoMemory.lines(UserDefaults.standard.string(forKey: Config.Key.repos) ?? ""))
+        UserDefaults.standard.set(RepoMemory.encode(repos), forKey: RepoMemory.key)
+        machines = machines.map { m in
+            var m = m
+            m.snap.runners = m.snap.runners.map { f in
+                var f = f
+                let ref = RepoMemory.spelled(RepoRef(owner: f.owner, repo: f.repo), in: repos)
+                f.owner = ref.owner; f.repo = ref.repo
+                return f
+            }
+            return m
+        }
+
         var map: [String: Place] = [:]
         let dup = Self.duplicateNames(machines)
         for m in machines { for r in m.snap.runners { map[Self.runnerID(r, duplicates: dup)] = Place(host: m.host, profile: m.profile, dir: r.dir) } }
         lock.withLock { located = map }
 
-        // Repos seen before still count when their runner VM is stopped (see RepoMemory).
-        let found = Set(machines.flatMap { $0.snap.runners }.map { RepoRef(owner: $0.owner, repo: $0.repo) })
-        let repos = RepoMemory.merge(found: found, remembered: (UserDefaults.standard.stringArray(forKey: RepoMemory.key) ?? []) + RepoMemory.lines(UserDefaults.standard.string(forKey: Config.Key.repos) ?? ""))
-        UserDefaults.standard.set(RepoMemory.encode(repos), forKey: RepoMemory.key)
         let github = self.github
         // One repo the token cannot see is a warning for that repo; it must not stop every other card updating.
         let (runners, jobs, repoWarnings) = try await withThrowingTaskGroup(of: ([GHRunner], [GHJob], String?).self) { group in
@@ -188,7 +199,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
             report.lines.append(ConnectionReport.host(label, error: count == 0 ? failure : nil, runners: count))
         }
         guard let token = Keychain.token() else { report.lines.append(ConnectionReport.noToken); return report }
-        for r in repos.sorted(by: { $0.repo < $1.repo }) {
+        for r in RepoMemory.merge(found: repos, remembered: []).sorted(by: { $0.repo < $1.repo }) {
             do { _ = try await github.runners(owner: r.owner, repo: r.repo, token: token); report.lines.append(ConnectionReport.repo(r.repo, error: nil)) }
             catch { report.lines.append(ConnectionReport.repo(r.repo, error: error)) }
         }

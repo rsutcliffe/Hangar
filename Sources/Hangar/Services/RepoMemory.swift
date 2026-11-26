@@ -22,7 +22,23 @@ enum RepoMemory {
         repos.map { "\($0.owner)/\($0.repo)" }.sorted()
     }
 
+    /// GitHub ignores capital letters in owner and repo names, so spellings that differ only in them are one repo: reading both
+    /// listed its on-demand runners twice. A spelling seen in a runner folder beats a remembered one; ties go to the first in
+    /// sort order, so the choice does not change between polls.
     static func merge(found: Set<LiveBackend.RepoRef>, remembered: [String]) -> Set<LiveBackend.RepoRef> {
-        found.union(remembered.compactMap(parse))
+        var chosen: [String: LiveBackend.RepoRef] = [:]
+        for refs in [Array(found), remembered.compactMap(parse)] {
+            for r in refs.sorted(by: { name($0) < name($1) }) where chosen[name(r).lowercased()] == nil {
+                chosen[name(r).lowercased()] = r
+            }
+        }
+        return Set(chosen.values)
+    }
+
+    private static func name(_ r: LiveBackend.RepoRef) -> String { "\(r.owner)/\(r.repo)" }
+
+    /// The spelling `repos` uses for `ref`. Runner folders must use it too: runners and jobs are matched to them by repo name.
+    static func spelled(_ ref: LiveBackend.RepoRef, in repos: Set<LiveBackend.RepoRef>) -> LiveBackend.RepoRef {
+        repos.first { name($0).lowercased() == name(ref).lowercased() } ?? ref
     }
 }

@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.20 - 2026-11-26
+
+- On-demand runners are no longer listed twice. GitHub ignores capital letters in repository names, but Hangar did not: a repository saved under two spellings (for example `My-App` and `my-app`) was read twice, so each of its on-demand runners had two rows and was counted twice. Hangar now treats them as one repository.
+
 ## 0.1.19 - 2026-11-25
 
 - On-demand runners on a Mac with a second Docker daemon now show the Mac's name. A Mac can run its orchestrator in more than one Colima virtual machine (`orchestrator`, `orchestrator2`), and Hangar read only the first, so a runner in the second showed no Mac name. Hangar now reads every running `orchestrator` virtual machine on each Mac.
