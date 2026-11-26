@@ -43,25 +43,29 @@ struct OrchestratorCard: View {
     /// "Typical wait" is the runs-weighted mean of each set's `waitP50Sec`, so it is not a median of all jobs. Days are UTC
     /// dates. nil with nothing for today; no comparison with nothing in the 7 days before.
     nonisolated static func waitLine(days: [OrchestratorState.Day]?, now: Date) -> String? {
-        func day(_ date: Date) -> String { date.formatted(.iso8601.year().month().day()) }
-        let today = day(now), weekAgo = day(now.addingTimeInterval(-7 * 86_400))
-        func typical(_ include: (String) -> Bool) -> String? {
-            var runs = 0.0, total = 0.0                 // Double: numbers from a file must not be able to overflow
-            for d in days ?? [] where d.date.map(include) == true {
-                for set in (d.sets ?? [:]).values {
-                    guard let n = set.runs, n > 0, let wait = set.waitP50Sec else { continue }
-                    runs += Double(n); total += Double(n) * Double(wait)
-                }
-            }
-            guard runs > 0 else { return nil }
-            let seconds = Int(min(1e9, max(0, (total / runs).rounded())))
-            if seconds < 60 { return "\(seconds)s" }
-            if seconds >= 3600 { return Format.duration(TimeInterval(seconds)) }
-            return seconds % 60 == 0 ? "\(seconds / 60)m" : "\(seconds / 60)m \(seconds % 60)s"
-        }
-        guard let now = typical({ $0 == today }) else { return nil }
-        let before = typical { $0 >= weekAgo && $0 < today }
+        let today = utcDay(now), weekAgo = utcDay(now.addingTimeInterval(-7 * 86_400))
+        guard let now = typicalWait(days: days, include: { $0 == today }) else { return nil }
+        let before = typicalWait(days: days) { $0 >= weekAgo && $0 < today }
         return "Typical wait today \(now)" + (before.map { ", previous 7 days \($0)" } ?? "")
+    }
+
+    /// A date as the file names its days.
+    nonisolated static func utcDay(_ date: Date) -> String { date.formatted(.iso8601.year().month().day()) }
+
+    /// The runs-weighted mean wait over the days `include` accepts, as text; nil when none of them has a run.
+    nonisolated static func typicalWait(days: [OrchestratorState.Day]?, include: (String) -> Bool) -> String? {
+        var runs = 0.0, total = 0.0                 // Double: numbers from a file must not be able to overflow
+        for d in days ?? [] where d.date.map(include) == true {
+            for set in (d.sets ?? [:]).values {
+                guard let n = set.runs, n > 0, let wait = set.waitP50Sec else { continue }
+                runs += Double(n); total += Double(n) * Double(wait)
+            }
+        }
+        guard runs > 0 else { return nil }
+        let seconds = Int(min(1e9, max(0, (total / runs).rounded())))
+        if seconds < 60 { return "\(seconds)s" }
+        if seconds >= 3600 { return Format.duration(TimeInterval(seconds)) }
+        return seconds % 60 == 0 ? "\(seconds / 60)m" : "\(seconds / 60)m \(seconds % 60)s"
     }
 
     var body: some View {

@@ -196,6 +196,127 @@ extension OrchestratorState {
     }
 }
 
+/// What the throughput card shows, worked out from the state file.
+extension OrchestratorState {
+    struct Throughput: Equatable {
+        struct Point: Equatable {
+            var start: Date
+            var completed: Int
+            var failed: Int
+            var running: Int
+            var waiting: Int
+            /// Rises after a missing bucket, so a line is not drawn across time nothing is known about.
+            var segment: Int
+        }
+
+        /// One failed run (or one job, when its run is unknown).
+        struct Entry: Equatable {
+            var time: Date?
+            var repo: String
+            var job: String
+            /// The fault and the failed step; empty when neither is known.
+            var detail: String
+            /// Further failed jobs of the same run among those the file keeps.
+            var more: Int
+        }
+
+        /// The six hours of the charts' shared time axis.
+        var domain: ClosedRange<Date>
+        var points: [Point]
+        var doneLastHour: Int?
+        var failed6h: Int?
+        var runningNow: Int?
+        var waitingNow: Int?
+        var typicalWait: String?
+        /// The latest runs, newest first.
+        var failures: [Entry]
+        var failureTotal: Int
+    }
+
+    static let bucketLength: TimeInterval = 300
+
+    static func faultLabel(_ fault: String?) -> String? {
+        guard let fault, !fault.isEmpty else { return nil }
+        return fault == "memory_kill" ? "Out of memory" : "Runner fault: \(fault.replacingOccurrences(of: "_", with: " "))"
+    }
+
+    /// nil when there is no card: no `throughput` array, or a stale state, whose numbers are not current.
+    ///
+    /// "Last hour" and "6 hours" are spans of time ending at the heartbeat, not the last 12 or 72 entries, which would reach
+    /// further back across a gap or in an old file. The heartbeat, not this Mac's clock: it comes from the same clock as the
+    /// bucket starts, so a difference between two Macs' clocks moves nothing, and the stale rule keeps it within five
+    /// minutes of now.
+    func throughputSummary(failedSteps: [RunnerJobKey: String], now: Date) -> Throughput? {
+        guard let throughput, !isStale(now: now) else { return nil }
+        let length = Self.bucketLength
+        let end = (heartbeat.timeIntervalSince1970 / length).rounded(.down) * length + length
+        // Bounded so that no number from a file can overflow a sum or a chart's axis.
+        func count(_ n: Int?) -> Int { min(1_000_000, max(0, n ?? 0)) }
+        func within(_ start: Date, _ span: TimeInterval) -> Bool { start <= heartbeat && heartbeat.timeIntervalSince(start) < span }
+
+        var byStart: [Date: Bucket] = [:]
+        for b in throughput { if let start = b.start, within(start, 6 * 3600) { byStart[start] = b } }
+        var segment = 0
+        var previous: Date?
+        let points = byStart.keys.sorted().map { start in
+            if let previous, start.timeIntervalSince(previous) > length { segment += 1 }
+            previous = start
+            let b = byStart[start]
+            return Throughput.Point(start: start, completed: count(b?.completed), failed: count(b?.failed),
+                                    running: count(b?.running), waiting: count(b?.waiting), segment: segment)
+        }
+        let hour = points.filter { within($0.start, 3600) }
+        // "Now" is only the bucket holding the heartbeat.
+        let current = points.last.flatMap { within($0.start, length) ? $0 : nil }
+        func total(_ points: [Throughput.Point], _ value: KeyPath<Throughput.Point, Int>) -> Int? {
+            points.isEmpty ? nil : points.reduce(0) { $0 + $1[keyPath: value] }
+        }
+
+        // The file lists failed jobs oldest first. One run's jobs make one entry, named by the earliest; run 0 is unknown.
+        var runs: [[Failure]] = []
+        var indexOfRun: [Int: Int] = [:]
+        for f in failures ?? [] {
+            let id = f.runId ?? 0
+            if id != 0, let i = indexOfRun[id] { runs[i].append(f); continue }
+            if id != 0 { indexOfRun[id] = runs.count }
+            runs.append([f])
+        }
+        let entries = runs.reversed().prefix(5).map { jobs in
+            let first = jobs[0]
+            var detail: [String] = []
+            if let label = Self.faultLabel(first.fault) { detail.append(label) }
+            else if let label = jobs.lazy.compactMap({ Self.faultLabel($0.fault) }).first { detail.append("\(label) (another job)") }
+            if let id = first.runId, id != 0, let runner = first.runner, let step = failedSteps[RunnerJobKey(runId: id, runner: runner)] {
+                detail.append(step)
+            }
+            return Throughput.Entry(time: first.time, repo: first.repo ?? "", job: first.job ?? "",
+                                    detail: detail.joined(separator: " · "), more: jobs.count - 1)
+        }
+
+        return Throughput(domain: Date(timeIntervalSince1970: end - 6 * 3600)...Date(timeIntervalSince1970: end), points: points,
+                          doneLastHour: total(hour, \.completed), failed6h: total(points, \.failed),
+                          runningNow: current?.running, waitingNow: current?.waiting,
+                          typicalWait: OrchestratorCard.typicalWait(days: days) { $0 == OrchestratorCard.utcDay(now) },
+                          failures: Array(entries), failureTotal: runs.count)
+    }
+
+    /// The time and value of the bucket under the pointer.
+    static func hoverText(at date: Date, points: [Throughput.Point], value: KeyPath<Throughput.Point, Int>) -> String {
+        func time(_ d: Date) -> String { d.formatted(date: .omitted, time: .shortened) }
+        if let p = points.last(where: { $0.start <= date && date.timeIntervalSince($0.start) < bucketLength }) {
+            return "\(time(p.start)) · \(p[keyPath: value])"
+        }
+        let start = Date(timeIntervalSince1970: (date.timeIntervalSince1970 / bucketLength).rounded(.down) * bucketLength)
+        return "\(time(start)) · no data"
+    }
+
+    /// A chart's accessibility label.
+    static func spoken(_ title: String, points: [Throughput.Point], value: KeyPath<Throughput.Point, Int>) -> String {
+        guard let last = points.last, let peak = points.map({ $0[keyPath: value] }).max() else { return "\(title): no data" }
+        return "\(title): latest \(last[keyPath: value]), peak \(peak)"
+    }
+}
+
 /// Which orchestrator notices are due. Each is offered once while its condition lasts; the notifier's cooldown and burst cap
 /// still apply to what is offered.
 struct OrchestratorAnnouncer {

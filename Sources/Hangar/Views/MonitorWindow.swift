@@ -21,6 +21,7 @@ struct MonitorWindow: View {
                     let orchestrator = OrchestratorCard.sections(state: store.orchestrator, seen: store.orchestratorSeen,
                                                                  otherVersion: store.orchestratorOtherVersion, now: ctx.date)
                     if !orchestrator.isEmpty { OrchestratorCard(parts: orchestrator) }
+                    if let t = store.orchestrator?.throughputSummary(failedSteps: store.failedSteps, now: ctx.date) { ThroughputCard(summary: t) }
                     if !store.onDemand.isEmpty { OnDemandCard(runners: store.onDemand, now: ctx.date) }
                     UpNextCard(queue: store.queue, now: ctx.date)
                     // A Grid (not a lazy one) so the cards in a row share the tallest card's height.

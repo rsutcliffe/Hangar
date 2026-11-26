@@ -76,6 +76,8 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
         }
         snap.orchestrator = Self.orchestratorState(now: now)
         snap.orchestratorSeenOn = "mac-mini"
+        snap.failedSteps = [RunnerJobKey(runId: 17_000_000_103, runner: "web-plain-1795015491425386000"): "Run integration tests",
+                            RunnerJobKey(runId: 17_000_000_101, runner: "web-plain-1795015400000000002"): "Compile"]
         return snap
     }
 
@@ -96,10 +98,14 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
             recommendations: [.init(id: "repeat_kill:web-stack", rule: "repeat_kill", text: "web-stack was killed for memory twice this week; consider giving it more")],
             throughput: (0..<72).map { i in
                 .init(start: Date(timeIntervalSince1970: (now.timeIntervalSince1970 / 300).rounded(.down) * 300 - Double(71 - i) * 300),
-                      completed: [2, 3, 1, 4, 0, 2][i % 6], failed: i % 23 == 7 ? 1 : 0, running: [2, 3, 3, 1, 2][i % 5], waiting: i % 9 < 3 ? i % 4 : 0)
+                      completed: [2, 3, 1, 4, 2, 2][i % 6], failed: [20, 40, 53, 68].contains(i) ? 1 : 0,      // one per failed run below
+                      running: [2, 3, 3, 1, 2][i % 5], waiting: i % 9 < 3 ? i % 4 : 0)
             },
-            failures: [.init(time: ago(5400), set: "web-stack", repo: "web", job: "E2E tests", jobId: "8f3a1c", runner: "web-stack-1795015470612973000", runId: 17_000_000_101, fault: "memory_kill"),
-                       .init(time: ago(900), set: "web-plain", repo: "api-server", job: "Lint", jobId: "b27d90", runner: "web-plain-1795015491425386000", runId: 17_000_000_102, fault: "")],
+            failures: [.init(time: ago(15_300), set: "web-plain", repo: "ios-app", job: "Unit tests", jobId: "41c0aa", runner: "web-plain-1795015400000000001", runId: 17_000_000_100, fault: "failed_start"),
+                       .init(time: ago(9300), set: "web-plain", repo: "api-server", job: "Build", jobId: "77de12", runner: "web-plain-1795015400000000002", runId: 17_000_000_101, fault: ""),
+                       .init(time: ago(5400), set: "web-stack", repo: "web", job: "E2E tests", jobId: "8f3a1c", runner: "web-stack-1795015470612973000", runId: 17_000_000_102, fault: "memory_kill"),
+                       .init(time: ago(900), set: "web-plain", repo: "api-server", job: "Integration tests against the previous release", jobId: "b27d90", runner: "web-plain-1795015491425386000", runId: 17_000_000_103, fault: ""),
+                       .init(time: ago(840), set: "web-plain", repo: "api-server", job: "Test results", jobId: "b27d91", runner: "web-plain-1795015491425386001", runId: 17_000_000_103, fault: "")],
             days: (0..<7).reversed().map { back in
                 .init(date: utcDay.string(from: ago(Double(back) * 86_400)), waitingSec: 900 + back * 240,
                       sets: ["web-stack": .init(runs: 18 + back, waitP50Sec: 25, waitP90Sec: 140 + back * 10, failed: back % 3, memoryKills: back == 0 ? 1 : 0,

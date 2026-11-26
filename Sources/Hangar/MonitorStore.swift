@@ -10,6 +10,9 @@ final class MonitorStore {
     private(set) var orchestrator: OrchestratorState?
     private(set) var orchestratorSeen = false
     private(set) var orchestratorOtherVersion = false
+    /// Kept across polls: GitHub's jobs for a finished run are only read for ten minutes, and the throughput card lists
+    /// failures for longer than that.
+    private(set) var failedSteps: [RunnerJobKey: String] = [:]
     private var orchestratorAnnouncer = OrchestratorAnnouncer()
     private let startedAt = Date()
     private(set) var lastUpdated: Date?
@@ -356,6 +359,8 @@ final class MonitorStore {
         orchestrator = snap.orchestrator
         orchestratorSeen = snap.orchestratorSeenOn != nil
         orchestratorOtherVersion = snap.orchestratorOtherVersion
+        failedSteps.merge(snap.failedSteps) { _, new in new }
+        if failedSteps.count > 500 { failedSteps = snap.failedSteps }       // far more than the 20 failures the file keeps
         // Polls are at most the interval apart (60 s with the window hidden); two more minutes covers a slow one.
         let due = orchestratorAnnouncer.due(state: orchestrator, seen: orchestratorSeen, otherVersion: orchestratorOtherVersion,
                                             startedAt: startedAt, now: now, awake: ProcessInfo.processInfo.systemUptime,

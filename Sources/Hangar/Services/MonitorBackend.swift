@@ -7,8 +7,16 @@ struct OnDemandFailure: Sendable {
     var failedAt: Date
 }
 
+/// What ties one of the orchestrator's failures to a job read from GitHub.
+struct RunnerJobKey: Hashable, Sendable {
+    var runId: Int
+    var runner: String
+}
+
 struct BackendSnapshot: Sendable {
     var onDemandFailures: [OnDemandFailure] = []
+    /// The first failed step's name, for each failed job read this poll that has one.
+    var failedSteps: [RunnerJobKey: String] = [:]
     var runners: [RunnerObservation]
     var queue: [QueuedJob]
     /// Live runners the orchestrator started for single jobs; they have no folder on any host, so they come from GitHub's list.
@@ -309,6 +317,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         }
         var snap = BackendSnapshot(runners: obs, queue: queue(from: jobs, runners: runners))
         snap.onDemandFailures = onDemandFailures(jobs: jobs, now: now)
+        snap.failedSteps = failedSteps(jobs: jobs)
         snap.onDemand = onDemandRunners(runners: runners, jobs: jobs, known: Set(machines.flatMap { $0.snap.runners }.map { "\($0.repo)/\($0.name)" }), hostOf: hostOf)
         return snap
     }
@@ -335,6 +344,16 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                   seen.insert(j.id).inserted else { return nil }
             return OnDemandFailure(set: set, job: activeJob(j, lastOutput: done), failedAt: done)
         }.sorted { $0.failedAt < $1.failedAt }
+    }
+
+    static func failedSteps(jobs: [GHJob]) -> [RunnerJobKey: String] {
+        var out: [RunnerJobKey: String] = [:]
+        for j in jobs where j.conclusion == "failure" {
+            guard let runner = j.runnerName, !runner.isEmpty,
+                  let step = j.steps.first(where: { $0.conclusion == "failure" })?.name, !step.isEmpty else { continue }
+            out[RunnerJobKey(runId: j.runId, runner: runner)] = step
+        }
+        return out
     }
 
     /// The keys of jobs whose newest completed run on this runner succeeded. Only the newest counts: a success older than a failure

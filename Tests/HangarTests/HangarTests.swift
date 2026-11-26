@@ -2041,3 +2041,166 @@ final class OrchestratorStateTests: XCTestCase {
                        [.init(key: "orch|kill|2026-11-26T09:10:00Z|box-c", title: "Job killed for memory", body: "box-c: Killed for memory")])
     }
 }
+
+final class ThroughputTests: XCTestCase {
+    typealias Bucket = OrchestratorState.Bucket
+    typealias Failure = OrchestratorState.Failure
+
+    func date(_ s: String) -> Date { ISO8601DateFormatter().date(from: s)! }
+    /// Four minutes into the 09:15 bucket.
+    var heartbeat: Date { date("2026-11-26T09:19:00Z") }
+
+    /// A bucket `back` places before the one holding the heartbeat.
+    func bucket(_ back: Int, completed: Int = 0, failed: Int = 0, running: Int = 0, waiting: Int = 0) -> Bucket {
+        Bucket(start: date("2026-11-26T09:15:00Z").addingTimeInterval(Double(-300 * back)),
+               completed: completed, failed: failed, running: running, waiting: waiting)
+    }
+
+    func summary(_ buckets: [Bucket]?, failures: [Failure]? = nil, days: [OrchestratorState.Day]? = nil,
+                 steps: [RunnerJobKey: String] = [:], after: TimeInterval = 30) -> OrchestratorState.Throughput? {
+        OrchestratorState(version: 1, heartbeat: heartbeat, throughput: buckets, failures: failures, days: days)
+            .throughputSummary(failedSteps: steps, now: heartbeat.addingTimeInterval(after))
+    }
+
+    func failure(_ job: String, run: Int?, runner: String = "stack-1", at minute: Int, fault: String = "") -> Failure {
+        Failure(time: date("2026-11-26T09:00:00Z").addingTimeInterval(Double(minute * 60)), set: "stack", repo: "widgets",
+                job: job, jobId: "j-\(job)", runner: runner, runId: run, fault: fault)
+    }
+
+    func testFailuresGroupByRun() throws {
+        let s = try XCTUnwrap(summary([], failures: [failure("unit", run: 7, at: 1), failure("lint", run: 8, at: 2),
+                                                     failure("report", run: 7, at: 3), failure("status", run: 7, at: 4)]))
+        XCTAssertEqual(s.failures.map(\.job), ["lint", "unit"], "newest run first, each named by its earliest job")
+        XCTAssertEqual(s.failures.map(\.more), [0, 2])
+        XCTAssertEqual(s.failureTotal, 2)
+        XCTAssertEqual(s.failures.last?.time, date("2026-11-26T09:01:00Z"))
+        let many = try XCTUnwrap(summary([], failures: (1...8).map { failure("job-\($0)", run: $0, at: $0) }))
+        XCTAssertEqual(many.failures.map(\.job), ["job-8", "job-7", "job-6", "job-5", "job-4"])
+        XCTAssertEqual(many.failureTotal, 8)
+    }
+
+    func testRunIdZeroDoesNotGroup() throws {
+        let s = try XCTUnwrap(summary([], failures: [failure("a", run: 0, at: 1), failure("b", run: 0, at: 2),
+                                                     failure("c", run: nil, at: 3), failure("d", run: nil, at: 4)],
+                                      steps: [.init(runId: 0, runner: "stack-1"): "never shown"]))
+        XCTAssertEqual(s.failures.map(\.job), ["d", "c", "b", "a"])
+        XCTAssertEqual(s.failures.map(\.more), [0, 0, 0, 0])
+        XCTAssertEqual(s.failures.map(\.detail), ["", "", "", ""])
+    }
+
+    func testTileCountsRunsNotJobs() throws {
+        // Three failed jobs of one run: the bucket counts the run once.
+        let s = try XCTUnwrap(summary([bucket(1, completed: 3, failed: 1), bucket(0, completed: 1, failed: 0)],
+                                      failures: [failure("a", run: 7, at: 11), failure("b", run: 7, at: 12), failure("c", run: 7, at: 13)]))
+        XCTAssertEqual(s.failed6h, 1)
+        XCTAssertEqual(s.points.map(\.failed), [1, 0])
+        XCTAssertEqual(s.doneLastHour, 4)
+    }
+
+    func testDoneLastHourSumsTwelve() throws {
+        let s = try XCTUnwrap(summary((0..<20).reversed().map { bucket($0, completed: 1, running: $0 + 2, waiting: $0 + 1) }))
+        XCTAssertEqual(s.doneLastHour, 12)
+        XCTAssertEqual(s.runningNow, 2)
+        XCTAssertEqual(s.waitingNow, 1)
+        XCTAssertEqual(s.points.count, 20)
+    }
+
+    func testWindowsUseTimeNotCount() throws {
+        // Gaps and old buckets: six entries, of which the last twelve-by-count would take them all.
+        let s = try XCTUnwrap(summary([bucket(100, completed: 1000, failed: 1000), bucket(72, completed: 500, failed: 500),
+                                       bucket(71, completed: 100, failed: 4), bucket(12, completed: 50, failed: 2),
+                                       bucket(11, completed: 7), bucket(2, completed: 2, failed: 1, running: 3, waiting: 4)]))
+        XCTAssertEqual(s.doneLastHour, 9)
+        XCTAssertEqual(s.failed6h, 7)
+        XCTAssertEqual(s.points.map(\.completed), [100, 50, 7, 2])
+        XCTAssertEqual(s.points.map(\.segment), [0, 1, 1, 2])
+        XCTAssertNil(s.runningNow, "no bucket for the heartbeat's own five minutes")
+        XCTAssertNil(s.waitingNow)
+        XCTAssertEqual(s.domain, date("2026-11-26T03:20:00Z")...date("2026-11-26T09:20:00Z"))
+        // Only buckets from long ago: nothing is passed off as current.
+        let old = try XCTUnwrap(summary([bucket(200, completed: 5, running: 5)]))
+        XCTAssertEqual(old.points, [])
+        XCTAssertNil(old.doneLastHour); XCTAssertNil(old.failed6h); XCTAssertNil(old.runningNow)
+    }
+
+    func testStaleStateHidesCard() {
+        XCTAssertNotNil(summary([bucket(0)], after: 300))
+        XCTAssertNil(summary([bucket(0)], after: 301))
+    }
+
+    func testStepNameWhenSeen() throws {
+        func job(_ id: Int, run: Int, runner: String?, conclusion: String?, steps: [(String?, String)]) -> GHJob {
+            GHJob(id: id, runId: run, repo: "widgets", workflow: "CI", runNumber: 1, branch: "main", status: "completed",
+                  conclusion: conclusion, labels: [], runnerName: runner, createdAt: heartbeat, startedAt: nil, completedAt: nil,
+                  steps: steps.enumerated().map { .init(number: $0.offset + 1, status: "completed", conclusion: $0.element.0, name: $0.element.1) })
+        }
+        let steps = LiveBackend.failedSteps(jobs: [
+            job(1, run: 7, runner: "stack-1", conclusion: "failure", steps: [("success", "Check out"), ("failure", "Run unit tests"), ("failure", "Upload")]),
+            job(2, run: 7, runner: "stack-2", conclusion: "success", steps: [("failure", "Allowed to fail")]),
+            job(3, run: 8, runner: nil, conclusion: "failure", steps: [("failure", "No runner")]),
+            job(4, run: 9, runner: "stack-3", conclusion: "failure", steps: [("failure", "")]),
+        ])
+        XCTAssertEqual(steps, [.init(runId: 7, runner: "stack-1"): "Run unit tests"])
+        let s = try XCTUnwrap(summary([], failures: [failure("unit", run: 7, at: 1)], steps: steps))
+        XCTAssertEqual(s.failures.map(\.detail), ["Run unit tests"])
+        let both = try XCTUnwrap(summary([], failures: [failure("unit", run: 7, at: 1, fault: "runner_error")], steps: steps))
+        XCTAssertEqual(both.failures.map(\.detail), ["Runner fault: runner error · Run unit tests"])
+    }
+
+    func testNoStepNameWhenNotSeen() throws {
+        let steps: [RunnerJobKey: String] = [.init(runId: 7, runner: "stack-2"): "Other runner", .init(runId: 8, runner: "stack-1"): "Other run"]
+        let s = try XCTUnwrap(summary([], failures: [failure("unit", run: 7, at: 1)], steps: steps))
+        XCTAssertEqual(s.failures.map(\.detail), [""])
+        // A later job of the run does not lend its step to the earliest one.
+        let later = try XCTUnwrap(summary([], failures: [failure("unit", run: 7, at: 1), failure("report", run: 7, runner: "stack-2", at: 2)], steps: steps))
+        XCTAssertEqual(later.failures.map(\.detail), [""])
+    }
+
+    func testFaultLabel() throws {
+        XCTAssertEqual(OrchestratorState.faultLabel("memory_kill"), "Out of memory")
+        XCTAssertEqual(OrchestratorState.faultLabel("failed_start"), "Runner fault: failed start")
+        XCTAssertEqual(OrchestratorState.faultLabel("hung_release"), "Runner fault: hung release")
+        XCTAssertEqual(OrchestratorState.faultLabel("something_new"), "Runner fault: something new")
+        XCTAssertNil(OrchestratorState.faultLabel(""))
+        XCTAssertNil(OrchestratorState.faultLabel(nil))
+        // A fault on a later job of the run is not lost, nor pinned on the job named.
+        let s = try XCTUnwrap(summary([], failures: [failure("unit", run: 7, at: 1), failure("report", run: 7, at: 2, fault: "memory_kill")]))
+        XCTAssertEqual(s.failures.map(\.detail), ["Out of memory (another job)"])
+    }
+
+    func testNoThroughputHidesCard() throws {
+        XCTAssertNil(summary(nil, failures: [failure("unit", run: 7, at: 1)]))
+        XCTAssertNil(try XCTUnwrap(OrchestratorState.parse(#"{"version":1,"heartbeat":"2026-11-26T09:19:00Z"}"#)).throughputSummary(failedSteps: [:], now: heartbeat))
+        let empty = try XCTUnwrap(summary([]), "an empty array still has a card")
+        XCTAssertNil(empty.doneLastHour); XCTAssertNil(empty.typicalWait); XCTAssertEqual(empty.failures, [])
+    }
+
+    func testTypicalWaitIsTodays() throws {
+        let days = [OrchestratorState.Day(date: "2026-11-25", sets: ["a": .init(runs: 4, waitP50Sec: 90)])]
+        XCTAssertNil(try XCTUnwrap(summary([], days: days)).typicalWait, "yesterday's is not today's")
+        let today = days + [.init(date: "2026-11-26", sets: ["a": .init(runs: 4, waitP50Sec: 75)])]
+        XCTAssertEqual(try XCTUnwrap(summary([], days: today)).typicalWait, "1m 15s")
+    }
+
+    func testHostileValues() throws {
+        let one = try XCTUnwrap(summary([bucket(0, completed: .max, failed: -5, running: .min, waiting: .max),
+                                         bucket(1, completed: .max), Bucket(), bucket(-3, completed: 9),
+                                         bucket(1, completed: 2)]))
+        XCTAssertEqual(one.points.map(\.completed), [2, 1_000_000], "sorted; a repeated start keeps the last; no start or a future one is dropped")
+        XCTAssertEqual(one.points.last?.failed, 0)
+        XCTAssertEqual(one.runningNow, 0)
+        XCTAssertEqual(one.waitingNow, 1_000_000)
+        XCTAssertEqual(one.doneLastHour, 1_000_002)
+    }
+
+    func testChartHoverAndSpokenText() throws {
+        let points = try XCTUnwrap(summary([bucket(3, completed: 4), bucket(1, completed: 1), bucket(0, completed: 2)])).points
+        let time = { (d: Date) in d.formatted(date: .omitted, time: .shortened) }
+        XCTAssertEqual(OrchestratorState.hoverText(at: date("2026-11-26T09:13:00Z"), points: points, value: \.completed),
+                       "\(time(date("2026-11-26T09:10:00Z"))) · 1")
+        XCTAssertEqual(OrchestratorState.hoverText(at: date("2026-11-26T09:07:00Z"), points: points, value: \.completed),
+                       "\(time(date("2026-11-26T09:05:00Z"))) · no data")
+        XCTAssertEqual(OrchestratorState.spoken("Jobs completed", points: points, value: \.completed), "Jobs completed: latest 2, peak 4")
+        XCTAssertEqual(OrchestratorState.spoken("Jobs waiting", points: [], value: \.waiting), "Jobs waiting: no data")
+    }
+}
