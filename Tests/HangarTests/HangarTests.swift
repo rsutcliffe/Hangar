@@ -1804,23 +1804,33 @@ final class OrchestratorStateTests: XCTestCase {
 
     func testSameHostReadAlwaysReplacesTheHeldState() {
         let now = date("2026-11-26T09:16:00Z")
-        let ahead = Held().updated(with: [read("box-a", file("2026-11-26T11:00:00Z"))], hosts: hosts, now: now)
+        let held = Held().updated(with: [read("box-a", file("2026-11-26T09:18:00Z"))], hosts: hosts, now: now)
         // The writer's clock has been put right: its next file has an older heartbeat.
-        let fixed = ahead.updated(with: [read("box-a", file("2026-11-26T09:15:00Z"))], hosts: hosts, now: now)
+        let fixed = held.updated(with: [read("box-a", file("2026-11-26T09:15:00Z"))], hosts: hosts, now: now)
         XCTAssertEqual(fixed.state?.heartbeat, date("2026-11-26T09:15:00Z"))
         XCTAssertEqual(fixed.host, "box-a")
     }
 
-    func testHeartbeatFarAheadIsNotPreferredOverACurrentOne() {
+    func testHeartbeatFarAheadIsIgnored() {
         let now = date("2026-11-26T09:16:00Z")
         let current = file("2026-11-26T09:15:00Z"), ahead = file("2026-11-26T09:21:01Z"), slightly = file("2026-11-26T09:21:00Z")
         for reads in [[read("box-a", current), read("box-b", ahead)], [read("box-b", ahead), read("box-a", current)]] {
             XCTAssertEqual(Held().updated(with: reads, hosts: hosts, now: now).host, "box-a")
         }
-        let held = Held().updated(with: [read("box-b", ahead)], hosts: hosts, now: now)
-        XCTAssertEqual(held.host, "box-b", "alone, it is still shown")
-        XCTAssertEqual(held.updated(with: [read("box-a", current)], hosts: hosts, now: now).host, "box-a")
-        XCTAssertEqual(Held().updated(with: [read("box-a", current), read("box-b", slightly)], hosts: hosts, now: now).host, "box-b", "300 s ahead is within the allowance")
+        // The only file anywhere: not held, but the orchestrator counts as seen, so the card does not vanish or look healthy.
+        let only = Held().updated(with: [read("box-b", ahead)], hosts: hosts, now: now)
+        XCTAssertNil(only.state)
+        XCTAssertEqual(only.host, "box-b")
+        XCTAssertEqual(OrchestratorCard.sections(state: only.state, seen: only.host != nil, otherVersion: only.otherVersion, now: now),
+                       [.notReporting("No heartbeat read since Hangar started")])
+        // It does not replace a held state, even from the supplying host.
+        let good = Held().updated(with: [read("box-a", current)], hosts: hosts, now: now)
+        XCTAssertEqual(good.updated(with: [read("box-a", ahead)], hosts: hosts, now: now), good)
+        XCTAssertEqual(good.updated(with: [read("box-b", ahead)], hosts: hosts, now: now), good)
+        // A held state that is now far ahead, because this Mac's clock was set back, is dropped too.
+        let setBack = good.updated(with: [read("box-a", nil)], hosts: hosts, now: date("2026-11-26T08:00:00Z"))
+        XCTAssertNil(setBack.state); XCTAssertEqual(setBack.host, "box-a")
+        XCTAssertNotNil(Held().updated(with: [read("box-a", slightly)], hosts: hosts, now: now).state, "300 s ahead is within the allowance")
     }
 
     func testSeenOnUsesTheUnreachableHostLabel() {
@@ -1861,7 +1871,95 @@ final class OrchestratorStateTests: XCTestCase {
         let state = OrchestratorState.parse(Self.fixture())!
         XCTAssertNotEqual(OrchestratorCard.sections(state: state, seen: true, otherVersion: true, now: now).first, .needsUpdate)
         XCTAssertEqual(OrchestratorCard.sections(state: state, seen: true, otherVersion: true, now: now.addingTimeInterval(600)), [.needsUpdate])
-        XCTAssertEqual(OrchestratorState.notices(state: state, seen: true, otherVersion: true, waitingSince: now, now: now.addingTimeInterval(600)), [], "it is reporting, so no 'not reporting' notice")
+        var polls = Polls(state: state, otherVersion: true, startedAt: now)
+        for t in stride(from: 600.0, through: 1800, by: 60) { XCTAssertEqual(polls.at(t), [], "it is reporting, so no 'not reporting' notice") }
+    }
+
+    /// Successful polls of one store: `at` seconds after it started, with the Mac awake all along unless `awake` says otherwise.
+    struct Polls {
+        var announcer = OrchestratorAnnouncer()
+        var state: OrchestratorState?
+        var seen = true
+        var otherVersion = false
+        var startedAt: Date
+        var quiet = false
+        mutating func at(_ t: TimeInterval, awake: TimeInterval? = nil) -> [OrchestratorState.Notice] {
+            announcer.due(state: state, seen: seen, otherVersion: otherVersion, startedAt: startedAt, now: startedAt.addingTimeInterval(t),
+                          awake: 5000 + (awake ?? t), maxGap: 180, quiet: quiet)
+        }
+    }
+
+    /// A state whose heartbeat is `age` seconds before `now`, with nothing else to announce.
+    func quietState(heartbeat now: Date, age: TimeInterval = 0) -> OrchestratorState {
+        .init(version: 1, heartbeat: now.addingTimeInterval(-age))
+    }
+
+    func testStoppedOrchestratorStillNotifiesOnce() {
+        let start = date("2026-11-26T09:16:00Z")
+        var polls = Polls(state: quietState(heartbeat: start, age: 60), startedAt: start)
+        var said: [TimeInterval: [OrchestratorState.Notice]] = [:]
+        for t in stride(from: 0.0, through: 1800, by: 60) {
+            let due = polls.at(t)
+            if !due.isEmpty { said[t] = due }
+        }
+        // First seen stale at 300 s (heartbeat 360 s old); said after 300 s more of seeing it so.
+        XCTAssertEqual(said, [600: [.init(key: "orch|stale", title: "Orchestrator not reporting", body: "Last heartbeat 11m ago.")]])
+    }
+
+    func testWakeWithStaleHeldStateAndOneFailedReadDoesNotNotify() {
+        let start = date("2026-11-26T09:16:00Z")
+        var polls = Polls(state: quietState(heartbeat: start), startedAt: start)
+        XCTAssertEqual(polls.at(0), [])
+        XCTAssertEqual(polls.at(60), [])
+        // Four hours asleep, 5 s awake. The state read fails, so the held state is hours old.
+        XCTAssertEqual(polls.at(14_460, awake: 65), [])
+        // The next read works.
+        polls.state = quietState(heartbeat: start.addingTimeInterval(14_520))
+        XCTAssertEqual(polls.at(14_520, awake: 125), [])
+        // A later stale spell is timed from its own start.
+        for t in stride(from: 14_580.0, through: 15_060, by: 60) { XCTAssertEqual(polls.at(t, awake: t - 14_395), [], "at \(t)") }
+    }
+
+    func testTimeAsleepOrUnderFailedPollsDoesNotCount() {
+        let start = date("2026-11-26T09:16:00Z")
+        let stale = quietState(heartbeat: start, age: 600)
+        // 240 s seen stale, then a sleep longer than the allowed gap: counting starts again.
+        var slept = Polls(state: stale, startedAt: start)
+        for t in stride(from: 0.0, through: 240, by: 60) { XCTAssertEqual(slept.at(t), []) }
+        XCTAssertEqual(slept.at(3840, awake: 300), [])
+        for t in stride(from: 3900.0, to: 4140, by: 60) { XCTAssertEqual(slept.at(t, awake: t - 3540), [], "at \(t)") }
+        XCTAssertEqual(slept.at(4140, awake: 600).map(\.key), ["orch|stale"])
+        // A nap shorter than the allowed gap: only the 5 s awake count.
+        var napped = Polls(state: stale, startedAt: start)
+        for t in stride(from: 0.0, through: 240, by: 60) { XCTAssertEqual(napped.at(t), []) }
+        XCTAssertEqual(napped.at(390, awake: 245), [])
+        XCTAssertEqual(napped.at(440, awake: 295), [])
+        XCTAssertEqual(napped.at(445, awake: 300).map(\.key), ["orch|stale"])
+        // A failed poll: the interval it falls in is not counted, what was seen before it still is.
+        var failing = Polls(state: stale, startedAt: start)
+        for t in stride(from: 0.0, through: 240, by: 60) { XCTAssertEqual(failing.at(t), []) }
+        failing.announcer.pollFailed()
+        XCTAssertEqual(failing.at(360), [])
+        XCTAssertEqual(failing.at(420).map(\.key), ["orch|stale"])
+        // An outage of Hangar's own polls longer than the allowed gap: counting starts again.
+        var offline = Polls(state: stale, startedAt: start)
+        for t in stride(from: 0.0, through: 240, by: 60) { XCTAssertEqual(offline.at(t), []) }
+        offline.announcer.pollFailed()
+        XCTAssertEqual(offline.at(1200), [])
+        XCTAssertEqual(offline.at(1260), [])
+    }
+
+    func testKillsFromBeforeThisRunDoNotNotify() {
+        let start = date("2026-11-26T09:16:00Z")
+        var s = quietState(heartbeat: start)
+        func kill(_ host: String, _ offset: TimeInterval?) -> OrchestratorState.Event {
+            .init(time: offset.map(start.addingTimeInterval), kind: "memory_kill", host: host, text: "Killed for memory", attributed: true)
+        }
+        s.events = [kill("days-old", -172_800), kill("just-before", -301), kill("no-time", nil), kill("at-the-edge", -300), kill("during", 30)]
+        var polls = Polls(state: s, startedAt: start)
+        XCTAssertEqual(polls.at(60).map(\.key), ["orch|kill|2026-11-26T09:16:30Z|during", "orch|kill|2026-11-26T09:11:00Z|at-the-edge"])
+        guard case .events(_, let rows)? = OrchestratorCard.sections(state: s, seen: true, otherVersion: false, now: start).last else { return XCTFail("no events") }
+        XCTAssertEqual(rows.map(\.host), ["during", "at-the-edge", "no-time", "just-before", "days-old"], "all still on the card")
     }
 
     func testCardOrdersProblemsFirst() throws {
@@ -1905,31 +2003,28 @@ final class OrchestratorStateTests: XCTestCase {
         let now = date("2026-11-26T09:16:00Z")
         var s = try XCTUnwrap(OrchestratorState.parse(Self.fixture()))
         s.events = nil
-        func current(_ s: OrchestratorState, at: Date) -> [OrchestratorState.Notice] {
-            OrchestratorState.notices(state: s, seen: true, otherVersion: false, waitingSince: now, now: at)
-        }
-        XCTAssertEqual(current(s, at: now), [
+        var polls = Polls(state: s, startedAt: now, quiet: true)
+        XCTAssertEqual(polls.at(0), [], "held in quiet hours")
+        polls.quiet = false
+        XCTAssertEqual(polls.at(0), [
             .init(key: "orch|host:box-a:reach", title: "Orchestrator problem", body: "box-a: No answer over ssh"),
             .init(key: "orch|nothing_running", title: "Orchestrator problem", body: "Jobs wait and nothing runs"),
-        ])
-        var announcer = OrchestratorAnnouncer()
-        XCTAssertEqual(announcer.due(current(s, at: now), fresh: true, quiet: true), [], "held in quiet hours")
-        XCTAssertEqual(announcer.due(current(s, at: now), fresh: true, quiet: false).count, 2, "and sent when they end")
-        XCTAssertEqual(announcer.due(current(s, at: now), fresh: true, quiet: false), [])
-        let later = now.addingTimeInterval(600)
-        XCTAssertEqual(current(s, at: later), [.init(key: "orch|stale", title: "Orchestrator not reporting", body: "Last heartbeat 11m ago.")])
-        XCTAssertEqual(announcer.due(current(s, at: later), fresh: false, quiet: false).map(\.key), ["orch|stale"])
-        XCTAssertEqual(announcer.due(current(s, at: later), fresh: false, quiet: false), [])
-        XCTAssertEqual(announcer.due(current(s, at: now), fresh: true, quiet: false), [], "the same open problems are not announced again after a stale spell")
-        var closed = s
-        closed.problems = [s.problems![1]]
-        XCTAssertEqual(announcer.due(current(closed, at: now), fresh: true, quiet: false), [])
-        XCTAssertEqual(announcer.due(current(s, at: now), fresh: true, quiet: false).map(\.key), ["orch|host:box-a:reach"], "reopened: offered again, subject to the cooldown")
-        // Seen before, nothing read since launch: said only once the same five minutes have passed.
-        XCTAssertEqual(OrchestratorState.notices(state: nil, seen: true, otherVersion: false, waitingSince: now, now: now.addingTimeInterval(300)), [])
-        XCTAssertEqual(OrchestratorState.notices(state: nil, seen: true, otherVersion: false, waitingSince: now, now: now.addingTimeInterval(301)),
-                       [.init(key: "orch|stale", title: "Orchestrator not reporting", body: "No heartbeat read since Hangar started.")])
-        XCTAssertEqual(OrchestratorState.notices(state: nil, seen: false, otherVersion: false, waitingSince: now, now: later), [])
+        ], "and sent when they end")
+        XCTAssertEqual(polls.at(0), [])
+        // The same file goes stale: only that is said, once.
+        XCTAssertEqual(stride(from: 60.0, through: 900, by: 60).flatMap { polls.at($0).map(\.key) }, ["orch|stale"])
+        polls.state?.heartbeat = now.addingTimeInterval(960)
+        XCTAssertEqual(polls.at(960), [], "the same open problems are not announced again after a stale spell")
+        polls.state?.problems = [s.problems![1]]
+        XCTAssertEqual(polls.at(970), [])
+        polls.state?.problems = s.problems
+        XCTAssertEqual(polls.at(980).map(\.key), ["orch|host:box-a:reach"], "reopened: offered again, subject to the cooldown")
+        // Seen before, nothing read since launch.
+        var unread = Polls(state: nil, startedAt: now)
+        for t in stride(from: 0.0, to: 300, by: 60) { XCTAssertEqual(unread.at(t), []) }
+        XCTAssertEqual(unread.at(300), [.init(key: "orch|stale", title: "Orchestrator not reporting", body: "No heartbeat read since Hangar started.")])
+        var never = Polls(state: nil, seen: false, startedAt: now)
+        for t in stride(from: 0.0, through: 900, by: 60) { XCTAssertEqual(never.at(t), []) }
     }
 
     func testUnattributedKillDoesNotNotify() throws {
@@ -1941,7 +2036,8 @@ final class OrchestratorStateTests: XCTestCase {
                     .init(time: at, kind: "memory_kill", host: "box-b", text: "no flag"),
                     .init(time: at, kind: "failed_start", host: "box-a", text: "another kind", attributed: true),
                     .init(time: at, kind: "memory_kill", host: "box-c", text: "Killed for memory", attributed: true)]
-        XCTAssertEqual(OrchestratorState.notices(state: s, seen: true, otherVersion: false, waitingSince: now, now: now),
+        var polls = Polls(state: s, startedAt: at)
+        XCTAssertEqual(polls.at(now.timeIntervalSince(at)),
                        [.init(key: "orch|kill|2026-11-26T09:10:00Z|box-c", title: "Job killed for memory", body: "box-c: Killed for memory")])
     }
 }

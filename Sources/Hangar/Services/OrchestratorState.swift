@@ -131,16 +131,22 @@ extension OrchestratorState {
         /// The latest poll read a file of another version.
         var otherVersion = false
 
-        /// A read that failed or does not parse changes nothing. The supplying host's own file always replaces what is held;
-        /// another host's replaces it only when it ranks at least as high. A host no longer in `hosts` is forgotten.
+        /// A read that failed or does not parse changes nothing, and one whose heartbeat is far in the future is ignored.
+        /// Otherwise the supplying host's own file always replaces what is held, and another host's replaces it when it is
+        /// at least as new. A host no longer in `hosts` is forgotten.
         func updated(with reads: [Read], hosts: [String], now: Date) -> Held {
             var next = target.map(hosts.contains) == true ? self : Held()
+            if next.state?.isAhead(now: now) == true { next.state = nil }        // this Mac's clock was set back
             let own = next.target
             let parsed = reads.compactMap { read in read.text.flatMap(OrchestratorState.parse).map { (read: read, state: $0) } }
-            for (read, state) in parsed.filter({ $0.read.target == own }) + parsed.filter({ $0.read.target != own }) {
-                guard read.target == own || next.state.map({ state.rank(now: now) >= $0.rank(now: now) }) ?? true else { continue }
+            let usable = parsed.filter { !$0.state.isAhead(now: now) }
+            for (read, state) in usable.filter({ $0.read.target == own }) + usable.filter({ $0.read.target != own }) {
+                guard read.target == own || next.state.map({ state.heartbeat >= $0.heartbeat }) ?? true else { continue }
                 next.state = state; next.target = read.target; next.host = read.host
             }
+            // With nothing but an ignored file, the orchestrator still counts as seen: the card then says it is not
+            // reporting, where no card at all would hide a wrong clock.
+            if next.target == nil, let ignored = parsed.first { next.target = ignored.read.target; next.host = ignored.read.host }
             next.otherVersion = reads.contains { $0.text.map(OrchestratorState.isOtherVersion) ?? false }
             return next
         }
@@ -155,12 +161,8 @@ extension OrchestratorState {
         }
     }
 
-    /// A current heartbeat beats one from more than `staleAfter` in the future (a wrong clock), which beats a stale one;
-    /// within a kind the newer wins.
-    private func rank(now: Date) -> (Int, Date) {
-        let ahead = heartbeat.timeIntervalSince(now) > Self.staleAfter
-        return (isStale(now: now) ? 0 : ahead ? 1 : 2, heartbeat)
-    }
+    /// A heartbeat this far in the future means a wrong clock. Trusted, it would not go stale until the clock caught up.
+    private func isAhead(now: Date) -> Bool { heartbeat.timeIntervalSince(now) > Self.staleAfter }
 
     struct Notice: Equatable, Sendable {
         var key: String
@@ -168,23 +170,25 @@ extension OrchestratorState {
         var body: String
     }
 
-    /// What is worth announcing now: each open problem and each memory kill tied to a job, or only that the orchestrator
-    /// has stopped reporting. A stale state's own problems and events are old news. `waitingSince` is when Hangar started.
-    static func notices(state: OrchestratorState?, seen: Bool, otherVersion: Bool, waitingSince: Date, now: Date) -> [Notice] {
-        func notReporting(_ body: String) -> [Notice] {
-            // A file of another version means it is reporting, and the card says what to do about it.
-            otherVersion ? [] : [Notice(key: "orch|stale", title: "Orchestrator not reporting", body: body)]
+    /// What is worth announcing now: each open problem, and each memory kill tied to a job since just before this run of
+    /// Hangar (`startedAt`), or only that the orchestrator has stopped reporting, once `silenceConfirmed`. A stale state's
+    /// own problems and events are old news.
+    static func notices(state: OrchestratorState?, silenceConfirmed: Bool, startedAt: Date, now: Date) -> [Notice] {
+        guard let state, !state.isStale(now: now) else {
+            guard silenceConfirmed else { return [] }
+            let body = state.map { "Last heartbeat \(Format.duration(now.timeIntervalSince($0.heartbeat))) ago." }
+            return [Notice(key: "orch|stale", title: "Orchestrator not reporting", body: body ?? "No heartbeat read since Hangar started.")]
         }
-        guard let state else {
-            return seen && now.timeIntervalSince(waitingSince) > staleAfter ? notReporting("No heartbeat read since Hangar started.") : []
-        }
-        if state.isStale(now: now) { return notReporting("Last heartbeat \(Format.duration(now.timeIntervalSince(state.heartbeat))) ago.") }
         func body(_ host: String?, _ text: String) -> String { (host ?? "").isEmpty ? text : "\(host ?? ""): \(text)" }
         let problems = (state.problems ?? []).compactMap { p in
             p.id.map { Notice(key: "orch|\($0)", title: "Orchestrator problem", body: body(p.host, p.text ?? p.class ?? "Unnamed problem")) }
         }
+        // Older kills stay on the card only: announced again at every launch, they would crowd out newer alerts.
+        let earliest = startedAt.addingTimeInterval(-staleAfter)
         // Newest first, so the most recent kills are the ones that get through the burst cap.
-        let kills = (state.events ?? []).reversed().filter { $0.kind == "memory_kill" && $0.attributed == true }.map { e in
+        let kills = (state.events ?? []).reversed().filter {
+            $0.kind == "memory_kill" && $0.attributed == true && $0.time.map { $0 >= earliest } == true
+        }.map { e in
             Notice(key: "orch|kill|\(e.time.map { $0.formatted(.iso8601) } ?? "")|\(e.host ?? "")", title: "Job killed for memory",
                    body: body(e.host, e.text ?? e.job ?? "A job was killed for memory"))
         }
@@ -196,10 +200,34 @@ extension OrchestratorState {
 /// still apply to what is offered.
 struct OrchestratorAnnouncer {
     private var sent: Set<String> = []
+    /// How long successful polls have seen the orchestrator silent, with nothing current in between.
+    private var silentFor: TimeInterval = 0
+    private var lastPoll: (at: Date, awake: TimeInterval, silent: Bool)?
+    private var failedSinceLastPoll = false
 
-    /// `fresh` is false when there is no current state: marks are then kept, so its old problems are not announced again
-    /// when it comes back. During quiet hours nothing is marked, so it is sent when they end.
-    mutating func due(_ current: [OrchestratorState.Notice], fresh: Bool, quiet: Bool) -> [OrchestratorState.Notice] {
+    /// One of Hangar's own polls failed: the time since the last successful one was not watched.
+    mutating func pollFailed() { failedSinceLastPoll = true }
+
+    /// Called after each successful poll. Only the time between two successful polls that both saw silence is counted,
+    /// with no failed poll between them, and it is measured on `awake` (`systemUptime`), which stands still during sleep.
+    /// More than `maxGap` of wall-clock time since the last successful poll (a sleep, or an outage) starts the count again.
+    ///
+    /// With no current state, marks are kept, so old problems are not announced again when it comes back. During quiet
+    /// hours nothing is marked, so it is sent when they end.
+    mutating func due(state: OrchestratorState?, seen: Bool, otherVersion: Bool, startedAt: Date, now: Date, awake: TimeInterval,
+                      maxGap: TimeInterval, quiet: Bool) -> [OrchestratorState.Notice] {
+        let fresh = state.map { !$0.isStale(now: now) } ?? false
+        // A file of another version means it is reporting, and the card says what to do about it.
+        let silent = !fresh && !otherVersion && (state != nil || seen)
+        if !silent { silentFor = 0 }
+        if let last = lastPoll {
+            if now.timeIntervalSince(last.at) > maxGap { silentFor = 0 }
+            else if silent, last.silent, !failedSinceLastPoll { silentFor += max(0, awake - last.awake) }
+        }
+        lastPoll = (now, awake, silent)
+        failedSinceLastPoll = false
+        let current = OrchestratorState.notices(state: state, silenceConfirmed: silent && silentFor >= OrchestratorState.staleAfter,
+                                                startedAt: startedAt, now: now)
         if fresh { sent.formIntersection(current.map(\.key)) }
         return quiet ? [] : current.filter { sent.insert($0.key).inserted }
     }

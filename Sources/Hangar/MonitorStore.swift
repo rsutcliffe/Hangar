@@ -118,6 +118,7 @@ final class MonitorStore {
                 // One quick retry for a brief network failure; anything else waits for the next poll.
                 if attempt == 0, RateLimit.isTransient(error) { attempt += 1; try? await Task.sleep(for: .seconds(2)); continue }
                 consecutiveFailures += 1
+                orchestratorAnnouncer.pollFailed()
                 if case GitHubError.rateLimited(let until) = error { backoffUntil = until }
                 errorMessage = (error as? LocalizedError)?.errorDescription ?? "Poll failed"
                 return
@@ -355,12 +356,12 @@ final class MonitorStore {
         orchestrator = snap.orchestrator
         orchestratorSeen = snap.orchestratorSeenOn != nil
         orchestratorOtherVersion = snap.orchestratorOtherVersion
-        let current = OrchestratorState.notices(state: orchestrator, seen: orchestratorSeen, otherVersion: orchestratorOtherVersion,
-                                                waitingSince: startedAt, now: now)
-        let fresh = orchestrator.map { !$0.isStale(now: now) } ?? false
-        for n in orchestratorAnnouncer.due(current, fresh: fresh, quiet: QuietHours.isQuiet(now, config: config)) {
-            notifier.notifyNotice(key: n.key, title: n.title, body: n.body)
-        }
+        // Polls are at most the interval apart (60 s with the window hidden); two more minutes covers a slow one.
+        let due = orchestratorAnnouncer.due(state: orchestrator, seen: orchestratorSeen, otherVersion: orchestratorOtherVersion,
+                                            startedAt: startedAt, now: now, awake: ProcessInfo.processInfo.systemUptime,
+                                            maxGap: TimeInterval(max(config.pollSeconds, 60) + 120),
+                                            quiet: QuietHours.isQuiet(now, config: config))
+        for n in due { notifier.notifyNotice(key: n.key, title: n.title, body: n.body) }
     }
 
     private func stopService(_ id: String, config: Config) {

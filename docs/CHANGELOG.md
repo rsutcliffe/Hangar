@@ -5,7 +5,7 @@ Each release's notes are the section for its version below; `scripts/release.sh 
 ## 0.1.22 - 2026-11-26
 
 - If you run the runner orchestrator, the window now has a card for it above the on-demand runners. It shows the open problems and how long each has lasted, any recommendations, the latest five events with the number in the last 24 hours, and the typical wait today against the previous 7 days. The typical wait is an average of each runner set's median wait, weighted by its number of runs. Days are counted in UTC. Hangar reads the orchestrator's state file from this Mac or, over SSH, from the other Macs it already watches. The card says when the orchestrator has stopped reporting, and when Hangar needs updating to read its file. It does not appear if no orchestrator has been seen.
-- You are notified of each new orchestrator problem, of each job killed for memory, and when the orchestrator stops reporting. Quiet hours hold these notices, and they share the limit that folds a burst into one summary. When Hangar starts, memory kills the orchestrator still lists can be announced, including ones from earlier days.
+- You are notified of each new orchestrator problem, of each job killed for memory, and when the orchestrator stops reporting. A memory kill is announced only if it happened after Hangar started, or in the five minutes before; older ones are listed on the card. "Not reporting" is announced once Hangar has watched the orchestrator stay silent for five minutes, not counting time the Mac was asleep or Hangar could not poll. Quiet hours hold these notices, and they share the limit that folds a burst into one summary.
 
 ## 0.1.21 - 2026-11-26
 
