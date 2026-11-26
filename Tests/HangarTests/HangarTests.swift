@@ -1525,6 +1525,27 @@ final class OnDemandCardTests: XCTestCase {
 }
 
 final class RepoMemoryTests: XCTestCase {
+    // GitHub ignores capital letters in owner and repo names: saved under two spellings, each of
+    // its on-demand runners was read twice and shown twice.
+    func testSavedSpellingsThatDifferOnlyInCapitalsAreOneRepo() {
+        let merged = RepoMemory.merge(found: [], remembered: ["o/app", "o/APP", "O/APP"])
+        XCTAssertEqual(RepoMemory.encode(merged), ["O/APP"], "one entry, the same one every time")
+    }
+
+    func testTheSpellingSeenInARunnerFolderWins() {
+        let merged = RepoMemory.merge(found: [LiveBackend.RepoRef(owner: "o", repo: "app")], remembered: ["o/APP"])
+        XCTAssertEqual(RepoMemory.encode(merged), ["o/app"])
+    }
+
+    func testARunnerFolderTakesTheChosenSpelling() {
+        let found: Set = [LiveBackend.RepoRef(owner: "o", repo: "app"), LiveBackend.RepoRef(owner: "o", repo: "APP")]
+        let repos = RepoMemory.merge(found: found, remembered: [])
+        XCTAssertEqual(repos.count, 1)
+        for ref in found { XCTAssertEqual(RepoMemory.spelled(ref, in: repos), repos.first) }
+        let other = LiveBackend.RepoRef(owner: "o", repo: "other")
+        XCTAssertEqual(RepoMemory.spelled(other, in: repos), other, "an unknown repo is left as it is")
+    }
+
     func testWatchedRepoLinesSplitOnNewlinesAndCommas() {
         XCTAssertEqual(RepoMemory.lines("o/a\n o/b , o/c\n\n"), ["o/a", "o/b", "o/c"])
     }
