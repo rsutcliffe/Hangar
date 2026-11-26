@@ -757,6 +757,11 @@ final class RestartWatchTests: XCTestCase {
 
 @MainActor
 final class HistoryFlushTests: XCTestCase {
+    /// HangarApp does not start its store when this is set; without it a test run would poll real hosts and write real settings.
+    func testTheTestHostIsRecognised() {
+        XCTAssertNotNil(ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"])
+    }
+
     func testFlushWritesTheLatestReadingsAndDemoDoesNot() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("hangar-flush-\(UUID().uuidString)")
         let url = dir.appendingPathComponent("u.json")
@@ -1376,7 +1381,10 @@ final class UpdateCheckTests: XCTestCase {
         XCTAssertEqual(ThrottleRule.decide(held, protect: false, underPressure: true, calmSince: nil, now: now).release, ["b"])                         // setting switched off
     }
     func testStoreHoldsAnIdleRunnerUnderPressureAndNeverTouchesABusyOne() async {
-        UserDefaults.standard.set(true, forKey: Config.Key.protectJobs); defer { UserDefaults.standard.removeObject(forKey: Config.Key.protectJobs) }
+        // The test host shares the installed app's settings, so the user's own value is put back (or left absent).
+        let was = UserDefaults.standard.object(forKey: Config.Key.protectJobs)
+        UserDefaults.standard.set(true, forKey: Config.Key.protectJobs)
+        defer { UserDefaults.standard.set(was, forKey: Config.Key.protectJobs) }      // setting nil removes the key
         func obs(_ id: String, busy: Bool) -> RunnerObservation {
             RunnerObservation(id: id, arch: .arm64, cpus: 2, memoryGB: 4, vmRunning: true, ghOnline: true, busy: busy, host: "box",
                               job: nil, cpuPercent: 1, memUsedGB: 1, lastJobEndedAt: nil,
@@ -1772,20 +1780,168 @@ final class OrchestratorStateTests: XCTestCase {
         XCTAssertTrue(s.isStale(now: s.heartbeat.addingTimeInterval(301)))
     }
 
+    typealias Held = OrchestratorState.Held
+    let hosts = ["me@box-a", "me@box-b"]
+    /// One host's read; the label is the target without its user.
+    func read(_ name: String, _ text: String?) -> OrchestratorState.Read { .init(target: "me@\(name)", host: name, text: text) }
+    func file(_ heartbeat: String) -> String { Self.fixture(heartbeat: heartbeat) }
+
     func testBadReadKeepsLastGoodState() {
-        let first = OrchestratorState.newest([("box-a", Self.fixture()), ("box-b", nil)], keeping: nil)
-        XCTAssertEqual(first.host, "box-a")
-        let good = first.state
-        XCTAssertNotNil(good)
+        let now = date("2026-11-26T09:16:00Z")
+        let good = Held().updated(with: [read("box-a", Self.fixture()), read("box-b", nil)], hosts: hosts, now: now)
+        XCTAssertEqual(good.host, "box-a")
+        XCTAssertNotNil(good.state)
         for bad in [nil, String(Self.fixture().dropLast(40)), ""] as [String?] {
-            let r = OrchestratorState.newest([("box-a", bad)], keeping: good)
-            XCTAssertEqual(r.state, good); XCTAssertNil(r.host)
+            XCTAssertEqual(good.updated(with: [read("box-a", bad)], hosts: hosts, now: now), good)
         }
-        let old = Self.fixture(heartbeat: "2026-11-20T09:00:00Z"), new = Self.fixture(heartbeat: "2026-11-26T09:20:00Z")
-        XCTAssertEqual(OrchestratorState.newest([("box-b", old)], keeping: good).state, good, "an old file left on another Mac does not replace it")
-        for reads in [[("box-b", old), ("box-a", new)], [("box-a", new), ("box-b", old)]] {
-            let r = OrchestratorState.newest(reads, keeping: good)
+        let old = file("2026-11-20T09:00:00Z"), new = file("2026-11-26T09:20:00Z")
+        XCTAssertEqual(good.updated(with: [read("box-b", old)], hosts: hosts, now: now), good, "an old file left on another Mac does not replace it")
+        for reads in [[read("box-b", old), read("box-a", new)], [read("box-a", new), read("box-b", old)]] {
+            let r = good.updated(with: reads, hosts: hosts, now: now)
             XCTAssertEqual(r.host, "box-a"); XCTAssertEqual(r.state?.heartbeat, date("2026-11-26T09:20:00Z"))
         }
+    }
+
+    func testSameHostReadAlwaysReplacesTheHeldState() {
+        let now = date("2026-11-26T09:16:00Z")
+        let ahead = Held().updated(with: [read("box-a", file("2026-11-26T11:00:00Z"))], hosts: hosts, now: now)
+        // The writer's clock has been put right: its next file has an older heartbeat.
+        let fixed = ahead.updated(with: [read("box-a", file("2026-11-26T09:15:00Z"))], hosts: hosts, now: now)
+        XCTAssertEqual(fixed.state?.heartbeat, date("2026-11-26T09:15:00Z"))
+        XCTAssertEqual(fixed.host, "box-a")
+    }
+
+    func testHeartbeatFarAheadIsNotPreferredOverACurrentOne() {
+        let now = date("2026-11-26T09:16:00Z")
+        let current = file("2026-11-26T09:15:00Z"), ahead = file("2026-11-26T09:21:01Z"), slightly = file("2026-11-26T09:21:00Z")
+        for reads in [[read("box-a", current), read("box-b", ahead)], [read("box-b", ahead), read("box-a", current)]] {
+            XCTAssertEqual(Held().updated(with: reads, hosts: hosts, now: now).host, "box-a")
+        }
+        let held = Held().updated(with: [read("box-b", ahead)], hosts: hosts, now: now)
+        XCTAssertEqual(held.host, "box-b", "alone, it is still shown")
+        XCTAssertEqual(held.updated(with: [read("box-a", current)], hosts: hosts, now: now).host, "box-a")
+        XCTAssertEqual(Held().updated(with: [read("box-a", current), read("box-b", slightly)], hosts: hosts, now: now).host, "box-b", "300 s ahead is within the allowance")
+    }
+
+    func testSeenOnUsesTheUnreachableHostLabel() {
+        XCTAssertEqual(LiveBackend.reportedLabel(reached: true, label: "box-a", target: "me@box-a.invalid", cached: "old"), "box-a")
+        XCTAssertEqual(LiveBackend.reportedLabel(reached: false, label: "short", target: "me@box-a.invalid", cached: "box-a"), "box-a")
+        XCTAssertEqual(LiveBackend.reportedLabel(reached: false, label: "short", target: "me@box-a.invalid", cached: nil), "me@box-a.invalid")
+        XCTAssertEqual(LiveBackend.reportedLabel(reached: false, label: "this Mac", target: nil, cached: nil), "this Mac")
+    }
+
+    func testSeenOnIsClearedWhenNoConfiguredHostMatches() throws {
+        let suite = "hangar-orch-\(UUID().uuidString)"
+        let d = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { d.removePersistentDomain(forName: suite) }
+        let now = date("2026-11-26T09:16:00Z")
+        Held().updated(with: [read("box-a", Self.fixture())], hosts: hosts, now: now).remember(in: d)
+        XCTAssertEqual(d.string(forKey: OrchestratorState.seenOnKey), "box-a")
+        // A new launch with the host down: still remembered.
+        let relaunched = Held.remembered(in: d).updated(with: [read("box-a", nil)], hosts: hosts, now: now)
+        XCTAssertEqual(relaunched.host, "box-a"); XCTAssertNil(relaunched.state)
+        let held = Held().updated(with: [read("box-a", Self.fixture())], hosts: hosts, now: now)
+        let removed = held.updated(with: [read("box-b", nil)], hosts: ["me@box-b"], now: now)
+        XCTAssertNil(removed.host); XCTAssertNil(removed.state, "a removed host's state is not kept either")
+        removed.remember(in: d)
+        XCTAssertNil(d.string(forKey: OrchestratorState.seenOnKey))
+        XCTAssertNil(Held.remembered(in: d).host)
+    }
+
+    func testOtherVersionSaysHangarNeedsUpdating() {
+        let now = date("2026-11-26T09:16:00Z")
+        let v2 = #"{"version":2,"heartbeat":{"at":"later"}}"#
+        let held = Held().updated(with: [read("box-a", v2)], hosts: hosts, now: now)
+        XCTAssertTrue(held.otherVersion)
+        XCTAssertEqual(OrchestratorCard.sections(state: held.state, seen: false, otherVersion: held.otherVersion, now: now), [.needsUpdate])
+        for unreadable in [nil, "", "{", #"{"heartbeat":"x"}"#, Self.fixture()] as [String?] {
+            XCTAssertFalse(Held().updated(with: [read("box-a", unreadable)], hosts: hosts, now: now).otherVersion)
+        }
+        // A current version 1 state wins over a leftover file; a stale one gives way to the update message.
+        let state = OrchestratorState.parse(Self.fixture())!
+        XCTAssertNotEqual(OrchestratorCard.sections(state: state, seen: true, otherVersion: true, now: now).first, .needsUpdate)
+        XCTAssertEqual(OrchestratorCard.sections(state: state, seen: true, otherVersion: true, now: now.addingTimeInterval(600)), [.needsUpdate])
+        XCTAssertEqual(OrchestratorState.notices(state: state, seen: true, otherVersion: true, waitingSince: now, now: now.addingTimeInterval(600)), [], "it is reporting, so no 'not reporting' notice")
+    }
+
+    func testCardOrdersProblemsFirst() throws {
+        let now = date("2026-11-26T09:16:00Z")
+        var s = try XCTUnwrap(OrchestratorState.parse(Self.fixture()))
+        s.events = (1...7).map { .init(time: date("2026-11-26T09:10:00Z"), kind: "idle_removed", host: "box-a", text: "event \($0)") }
+        XCTAssertEqual(OrchestratorCard.sections(state: s, seen: true, otherVersion: false, now: now), [
+            .problems([.init(host: "box-a", text: "No answer over ssh", age: "16m"), .init(host: "", text: "Jobs wait and nothing runs", age: "15m")]),
+            .recommendations(["Give widgets-stack more memory"]),
+            .events(inLast24h: 12, (3...7).reversed().map { .init(host: "box-a", text: "event \($0)", age: "6m") }),
+            .typicalWait("Typical wait today 10s, previous 7 days 20s"),
+        ])
+        s.problems = nil
+        XCTAssertEqual(OrchestratorCard.sections(state: s, seen: true, otherVersion: false, now: now).first, .noProblems)
+        XCTAssertEqual(OrchestratorCard.sections(state: s, seen: true, otherVersion: false, now: date("2026-11-26T09:27:00Z")), [.notReporting("Last heartbeat 12m ago")])
+        XCTAssertEqual(OrchestratorCard.sections(state: nil, seen: true, otherVersion: false, now: now), [.notReporting("No heartbeat read since Hangar started")])
+        XCTAssertEqual(OrchestratorCard.sections(state: nil, seen: false, otherVersion: false, now: now), [], "never seen: no card")
+    }
+
+    func testTypicalWaitWeightsByRuns() {
+        let now = date("2026-11-26T23:59:00Z")
+        func day(_ d: String, _ sets: [(Int, Int)]) -> OrchestratorState.Day {
+            .init(date: d, sets: Dictionary(uniqueKeysWithValues: sets.enumerated().map { ("set-\($0.offset)", .init(runs: $0.element.0, waitP50Sec: $0.element.1)) }))
+        }
+        let days = [day("2026-11-18", [(100, 999)]),                    // eight days back: not counted
+                    day("2026-11-19", [(1, 100)]), day("2026-11-25", [(3, 200), (0, 5000)]),
+                    day("2026-11-26", [(9, 10), (1, 110)])]
+        XCTAssertEqual(OrchestratorCard.waitLine(days: days, now: now), "Typical wait today 20s, previous 7 days 2m 55s")
+    }
+
+    func testNoWaitHistoryShowsNoComparison() {
+        let now = date("2026-11-26T09:16:00Z")
+        let today = OrchestratorState.Day(date: "2026-11-26", sets: ["a": .init(runs: 2, waitP50Sec: 60)])
+        XCTAssertEqual(OrchestratorCard.waitLine(days: [today], now: now), "Typical wait today 1m")
+        XCTAssertEqual(OrchestratorCard.waitLine(days: [.init(date: "2026-11-25", sets: ["a": .init(runs: 0, waitP50Sec: 0)]), today], now: now), "Typical wait today 1m")
+        XCTAssertNil(OrchestratorCard.waitLine(days: [.init(date: "2026-11-25", sets: ["a": .init(runs: 4, waitP50Sec: 9)])], now: now), "nothing for today, nothing to say")
+        XCTAssertNil(OrchestratorCard.waitLine(days: nil, now: now))
+    }
+
+    func testOneNoticePerProblem() throws {
+        let now = date("2026-11-26T09:16:00Z")
+        var s = try XCTUnwrap(OrchestratorState.parse(Self.fixture()))
+        s.events = nil
+        func current(_ s: OrchestratorState, at: Date) -> [OrchestratorState.Notice] {
+            OrchestratorState.notices(state: s, seen: true, otherVersion: false, waitingSince: now, now: at)
+        }
+        XCTAssertEqual(current(s, at: now), [
+            .init(key: "orch|host:box-a:reach", title: "Orchestrator problem", body: "box-a: No answer over ssh"),
+            .init(key: "orch|nothing_running", title: "Orchestrator problem", body: "Jobs wait and nothing runs"),
+        ])
+        var announcer = OrchestratorAnnouncer()
+        XCTAssertEqual(announcer.due(current(s, at: now), fresh: true, quiet: true), [], "held in quiet hours")
+        XCTAssertEqual(announcer.due(current(s, at: now), fresh: true, quiet: false).count, 2, "and sent when they end")
+        XCTAssertEqual(announcer.due(current(s, at: now), fresh: true, quiet: false), [])
+        let later = now.addingTimeInterval(600)
+        XCTAssertEqual(current(s, at: later), [.init(key: "orch|stale", title: "Orchestrator not reporting", body: "Last heartbeat 11m ago.")])
+        XCTAssertEqual(announcer.due(current(s, at: later), fresh: false, quiet: false).map(\.key), ["orch|stale"])
+        XCTAssertEqual(announcer.due(current(s, at: later), fresh: false, quiet: false), [])
+        XCTAssertEqual(announcer.due(current(s, at: now), fresh: true, quiet: false), [], "the same open problems are not announced again after a stale spell")
+        var closed = s
+        closed.problems = [s.problems![1]]
+        XCTAssertEqual(announcer.due(current(closed, at: now), fresh: true, quiet: false), [])
+        XCTAssertEqual(announcer.due(current(s, at: now), fresh: true, quiet: false).map(\.key), ["orch|host:box-a:reach"], "reopened: offered again, subject to the cooldown")
+        // Seen before, nothing read since launch: said only once the same five minutes have passed.
+        XCTAssertEqual(OrchestratorState.notices(state: nil, seen: true, otherVersion: false, waitingSince: now, now: now.addingTimeInterval(300)), [])
+        XCTAssertEqual(OrchestratorState.notices(state: nil, seen: true, otherVersion: false, waitingSince: now, now: now.addingTimeInterval(301)),
+                       [.init(key: "orch|stale", title: "Orchestrator not reporting", body: "No heartbeat read since Hangar started.")])
+        XCTAssertEqual(OrchestratorState.notices(state: nil, seen: false, otherVersion: false, waitingSince: now, now: later), [])
+    }
+
+    func testUnattributedKillDoesNotNotify() throws {
+        let now = date("2026-11-26T09:16:00Z")
+        var s = try XCTUnwrap(OrchestratorState.parse(Self.fixture()))
+        s.problems = nil
+        let at = date("2026-11-26T09:10:00Z")
+        s.events = [.init(time: at, kind: "memory_kill", host: "box-a", text: "not tied to a job", attributed: false),
+                    .init(time: at, kind: "memory_kill", host: "box-b", text: "no flag"),
+                    .init(time: at, kind: "failed_start", host: "box-a", text: "another kind", attributed: true),
+                    .init(time: at, kind: "memory_kill", host: "box-c", text: "Killed for memory", attributed: true)]
+        XCTAssertEqual(OrchestratorState.notices(state: s, seen: true, otherVersion: false, waitingSince: now, now: now),
+                       [.init(key: "orch|kill|2026-11-26T09:10:00Z|box-c", title: "Job killed for memory", body: "box-c: Killed for memory")])
     }
 }

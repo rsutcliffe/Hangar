@@ -2,6 +2,11 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.22 - 2026-11-26
+
+- If you run the runner orchestrator, the window now has a card for it above the on-demand runners. It shows the open problems and how long each has lasted, any recommendations, the latest five events with the number in the last 24 hours, and the typical wait today against the previous 7 days. The typical wait is an average of each runner set's median wait, weighted by its number of runs. Days are counted in UTC. Hangar reads the orchestrator's state file from this Mac or, over SSH, from the other Macs it already watches. The card says when the orchestrator has stopped reporting, and when Hangar needs updating to read its file. It does not appear if no orchestrator has been seen.
+- You are notified of each new orchestrator problem, of each job killed for memory, and when the orchestrator stops reporting. Quiet hours hold these notices, and they share the limit that folds a burst into one summary. When Hangar starts, memory kills the orchestrator still lists can be announced, including ones from earlier days.
+
 ## 0.1.21 - 2026-11-26
 
 - The Capacity window now counts on-demand runners. It showed only runners installed on your Macs, so while on-demand runners worked through a long queue every bar read as idle. A new section shows, by Mac and job queue, a bar for the average number of jobs running in each hour, with the average and the most at once over the hours recorded. It starts from this version, and counts while Hangar is open.

@@ -7,6 +7,11 @@ final class MonitorStore {
     private(set) var runners: [Runner] = []
     private(set) var queue: [QueuedJob] = []
     private(set) var onDemand: [OnDemandRunner] = []
+    private(set) var orchestrator: OrchestratorState?
+    private(set) var orchestratorSeen = false
+    private(set) var orchestratorOtherVersion = false
+    private var orchestratorAnnouncer = OrchestratorAnnouncer()
+    private let startedAt = Date()
     private(set) var lastUpdated: Date?
     private(set) var errorMessage: String?
     private(set) var notificationsOff = false
@@ -225,6 +230,7 @@ final class MonitorStore {
         for r in out { lastSeen[r.id] = now }
         out += HostRetention.carryOver(previous: runners, current: out, unreachable: Set(snap.unreachable), lastSeen: lastSeen)
         runners = out
+        orchestratorNotices(snap, config: config, now: now)        // last, so runner alerts reach the burst cap first
         lastUpdated = now
         let problems = ProblemBadge.count(out, outages: outageTracker.outages)
         NSApplication.shared.dockTile.badgeLabel = ProblemBadge.label(problems)
@@ -343,6 +349,18 @@ final class MonitorStore {
         once("memory", active: mem != nil, title: "Mac low on memory", body: "\(o.host.isEmpty ? "This Mac" : o.host): \(mem?.text ?? ""). Jobs in its VMs will run slowly.")
         once("streak", active: streak != nil, title: "Same job keeps failing", body: "\(o.id) has failed the same job \(streak ?? 0) times in a row.")
         once("long", active: longRun != nil, title: "Job running long", body: "\(o.id): a job is taking \(String(format: "%.1f", longRun ?? 0))x longer than usual.")
+    }
+
+    private func orchestratorNotices(_ snap: BackendSnapshot, config: Config, now: Date) {
+        orchestrator = snap.orchestrator
+        orchestratorSeen = snap.orchestratorSeenOn != nil
+        orchestratorOtherVersion = snap.orchestratorOtherVersion
+        let current = OrchestratorState.notices(state: orchestrator, seen: orchestratorSeen, otherVersion: orchestratorOtherVersion,
+                                                waitingSince: startedAt, now: now)
+        let fresh = orchestrator.map { !$0.isStale(now: now) } ?? false
+        for n in orchestratorAnnouncer.due(current, fresh: fresh, quiet: QuietHours.isQuiet(now, config: config)) {
+            notifier.notifyNotice(key: n.key, title: n.title, body: n.body)
+        }
     }
 
     private func stopService(_ id: String, config: Config) {

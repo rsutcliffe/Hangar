@@ -18,6 +18,9 @@ struct MonitorWindow: View {
                     header(now: ctx.date)
                     // What is running and waiting comes first: with many runner cards below, the window scrolls, and the work in
                     // progress must not be the part that scrolls out of sight.
+                    let orchestrator = OrchestratorCard.sections(state: store.orchestrator, seen: store.orchestratorSeen,
+                                                                 otherVersion: store.orchestratorOtherVersion, now: ctx.date)
+                    if !orchestrator.isEmpty { OrchestratorCard(parts: orchestrator) }
                     if !store.onDemand.isEmpty { OnDemandCard(runners: store.onDemand, now: ctx.date) }
                     UpNextCard(queue: store.queue, now: ctx.date)
                     // A Grid (not a lazy one) so the cards in a row share the tallest card's height.
