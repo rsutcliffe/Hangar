@@ -11,6 +11,8 @@ struct OrchestratorCard: View {
 
     enum Part: Equatable {
         case notReporting(String)
+        /// The Mac's name and the same detail line.
+        case cannotReach(String, String)
         case needsUpdate
         case noProblems
         case problems([Row])
@@ -22,12 +24,14 @@ struct OrchestratorCard: View {
     let parts: [Part]
 
     /// The card's contents from top to bottom; empty when there is no card (no state, and none ever seen).
-    nonisolated static func sections(state: OrchestratorState?, seen: Bool, otherVersion: Bool, now: Date) -> [Part] {
+    nonisolated static func sections(state: OrchestratorState?, seen: Bool, otherVersion: Bool, lost: OrchestratorState.Lost? = nil,
+                                     now: Date) -> [Part] {
         func age(_ date: Date?) -> String { date.map { Format.duration(now.timeIntervalSince($0)) } ?? "" }
         guard let state, !state.isStale(now: now) else {
             if otherVersion { return [.needsUpdate] }
-            if let state { return [.notReporting("Last heartbeat \(age(state.heartbeat)) ago")] }
-            return seen ? [.notReporting("No heartbeat read since Hangar started")] : []
+            guard state != nil || seen else { return [] }
+            let detail = state.map { "Last heartbeat \(age($0.heartbeat)) ago" } ?? "No heartbeat read since Hangar started"
+            return [lost.map { .cannotReach($0.mac, detail) } ?? .notReporting(detail)]
         }
         let problems = (state.problems ?? []).map { Row(host: $0.host ?? "", text: $0.summary, age: age($0.since)) }
         var parts: [Part] = [problems.isEmpty ? .noProblems : .problems(problems)]
@@ -94,10 +98,9 @@ struct OrchestratorCard: View {
     @ViewBuilder private func section(_ part: Part) -> some View {
         switch part {
         case .notReporting(let detail):
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Orchestrator not reporting").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.problemText)
-                Text(detail).font(.system(size: 11)).foregroundStyle(Theme.muted)
-            }
+            silent("Orchestrator not reporting", detail)
+        case .cannotReach(let mac, let detail):
+            silent("Cannot reach \(mac)", detail)
         case .needsUpdate:
             Text("Hangar needs updating to read the orchestrator's state").font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.problemText)
@@ -121,6 +124,14 @@ struct OrchestratorCard: View {
             }
         case .typicalWait(let line):
             Text(line).font(.system(size: 12)).monospacedDigit()
+        }
+    }
+
+    /// Why there is nothing current to show, and since when. A Mac's name is shown verbatim, like other text from outside.
+    private func silent(_ title: String, _ detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(verbatim: title).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.problemText)
+            Text(detail).font(.system(size: 11)).foregroundStyle(Theme.muted)
         }
     }
 

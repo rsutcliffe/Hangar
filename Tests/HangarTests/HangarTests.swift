@@ -1883,10 +1883,165 @@ final class OrchestratorStateTests: XCTestCase {
         var otherVersion = false
         var startedAt: Date
         var quiet = false
+        var lost: OrchestratorState.Lost? = nil
         mutating func at(_ t: TimeInterval, awake: TimeInterval? = nil) -> [OrchestratorState.Notice] {
-            announcer.due(state: state, seen: seen, otherVersion: otherVersion, startedAt: startedAt, now: startedAt.addingTimeInterval(t),
-                          awake: 5000 + (awake ?? t), maxGap: 180, quiet: quiet)
+            announcer.due(state: state, seen: seen, otherVersion: otherVersion, lost: lost, startedAt: startedAt,
+                          now: startedAt.addingTimeInterval(t), awake: 5000 + (awake ?? t), maxGap: 180, quiet: quiet)
         }
+        /// A poll a minute from `first` to `last`; the keys said, by time.
+        mutating func keys(_ first: TimeInterval, through last: TimeInterval) -> [TimeInterval: [String]] {
+            var said: [TimeInterval: [String]] = [:]
+            for t in stride(from: first, through: last, by: 60) {
+                let due = at(t)
+                if !due.isEmpty { said[t] = due.map(\.key) }
+            }
+            return said
+        }
+    }
+
+    /// What is held after one poll that follows a good read of box-a's file: each host with whether it was reached.
+    func held(_ polled: [(String, Bool)], local: Bool? = nil) -> Held {
+        let now = date("2026-11-26T09:16:00Z")
+        let all = hosts + ["local"]
+        let first = Held().updated(with: [read("box-a", Self.fixture())], hosts: all, now: now)
+        var reads = polled.map { OrchestratorState.Read(target: "me@\($0.0)", host: $0.0, text: nil, reached: $0.1) }
+        if let local { reads.append(.init(target: "local", host: "this Mac", text: nil, reached: local)) }
+        return first.updated(with: reads, hosts: all, now: now)
+    }
+
+    let away = OrchestratorState.Lost(mac: "box-a", othersRespond: false)
+    let cut = OrchestratorState.Lost(mac: "box-a", othersRespond: true)
+
+    func testOtherRemoteRespondsSaysCannotReach() {
+        let h = held([("box-a", false), ("box-b", true)], local: true)
+        XCTAssertEqual(h.lost, cut)
+        let start = date("2026-11-26T09:16:00Z")
+        let stale = quietState(heartbeat: start, age: 600)
+        XCTAssertEqual(OrchestratorCard.sections(state: stale, seen: true, otherVersion: false, lost: cut, now: start),
+                       [.cannotReach("box-a", "Last heartbeat 10m ago")])
+        XCTAssertEqual(OrchestratorCard.sections(state: nil, seen: true, otherVersion: false, lost: cut, now: start),
+                       [.cannotReach("box-a", "No heartbeat read since Hangar started")])
+        XCTAssertEqual(OrchestratorCard.sections(state: nil, seen: true, otherVersion: true, lost: cut, now: start), [.needsUpdate])
+        XCTAssertEqual(OrchestratorCard.sections(state: quietState(heartbeat: start), seen: true, otherVersion: false, lost: cut, now: start),
+                       [.noProblems], "a current state is shown, reached or not")
+        var polls = Polls(state: stale, startedAt: start, lost: cut)
+        XCTAssertEqual(polls.keys(0, through: 240), [:])
+        XCTAssertEqual(polls.at(300), [.init(key: "orch|unreachable", title: "Cannot reach box-a", body: "Last heartbeat 15m ago.")])
+        XCTAssertEqual(polls.keys(360, through: 1800), [:])
+        var unread = Polls(state: nil, startedAt: start, lost: cut)
+        XCTAssertEqual(unread.keys(0, through: 1800), [300: ["orch|unreachable"]])
+    }
+
+    func testNoRemoteRespondsIsSilentButTheCardSaysCannotReach() {
+        let h = held([("box-a", false), ("box-b", false)], local: true)
+        XCTAssertEqual(h.lost, away, "this Mac does not count")
+        let start = date("2026-11-26T09:16:00Z")
+        XCTAssertEqual(OrchestratorCard.sections(state: nil, seen: true, otherVersion: false, lost: away, now: start),
+                       [.cannotReach("box-a", "No heartbeat read since Hangar started")])
+        var polls = Polls(state: quietState(heartbeat: start, age: 600), startedAt: start, lost: away)
+        XCTAssertEqual(polls.keys(0, through: 3600), [:])
+    }
+
+    func testOnlyRemoteIsTheOrchestratorsMac() {
+        let all = ["local", "me@box-a"]
+        let now = date("2026-11-26T09:16:00Z")
+        let good = Held().updated(with: [read("box-a", Self.fixture())], hosts: all, now: now)
+        let h = good.updated(with: [.init(target: "me@box-a", host: "box-a", text: nil, reached: false),
+                                    .init(target: "local", host: "this Mac", text: nil, reached: true)], hosts: all, now: now)
+        XCTAssertEqual(h.lost, away)
+    }
+
+    func testReachedButStaleIsNotReporting() {
+        // The probe worked and the state read did not.
+        let h = held([("box-a", true), ("box-b", true)])
+        XCTAssertNil(h.lost)
+        // The probe failed and the state read worked: unreached, as the app's host warnings have it.
+        let now = date("2026-11-26T09:30:00Z")
+        let readOnly = h.updated(with: [.init(target: "me@box-a", host: "box-a", text: Self.fixture(), reached: false),
+                                        .init(target: "me@box-b", host: "box-b", text: nil, reached: true)], hosts: hosts, now: now)
+        XCTAssertNotNil(readOnly.state)
+        XCTAssertEqual(readOnly.lost, cut)
+        var polls = Polls(state: quietState(heartbeat: now, age: 600), startedAt: now)
+        XCTAssertEqual(polls.keys(0, through: 1800), [300: ["orch|stale"]])
+    }
+
+    func testLocalOrchestratorIsNeverCannotReach() {
+        let all = ["local", "me@box-b"]
+        let now = date("2026-11-26T09:16:00Z")
+        let good = Held().updated(with: [.init(target: "local", host: "this Mac", text: Self.fixture())], hosts: all, now: now)
+        for remote in [true, false] {
+            let h = good.updated(with: [.init(target: "local", host: "this Mac", text: nil, reached: false),
+                                        .init(target: "me@box-b", host: "box-b", text: nil, reached: remote)], hosts: all, now: now)
+            XCTAssertEqual(h.target, "local")
+            XCTAssertNil(h.lost)
+        }
+    }
+
+    /// A file left on another Mac must not take the orchestrator's place while its own Mac cannot be reached.
+    func testLeftoverFileDoesNotReplaceAnUnreachedOrchestratorsMac() {
+        let now = date("2026-11-26T09:16:00Z")
+        let remembered = Held(target: "me@box-a", host: "box-a")
+        let lostA = OrchestratorState.Read(target: "me@box-a", host: "box-a", text: nil, reached: false)
+        let old = remembered.updated(with: [lostA, read("box-b", file("2026-11-20T09:00:00Z"))], hosts: hosts, now: now)
+        XCTAssertEqual(old.target, "me@box-a"); XCTAssertNil(old.state); XCTAssertEqual(old.lost, cut)
+        let moved = remembered.updated(with: [lostA, read("box-b", file("2026-11-26T09:15:00Z"))], hosts: hosts, now: now)
+        XCTAssertEqual(moved.target, "me@box-b", "a current file means the orchestrator is there now"); XCTAssertNil(moved.lost)
+    }
+
+    func testAwayThenHomeDoesNotNotifyAtOnce() {
+        let start = date("2026-11-26T09:16:00Z")
+        let stale = quietState(heartbeat: start, age: 600)
+        for (home, key) in [(cut, "orch|unreachable"), (nil, "orch|stale")] {
+            var polls = Polls(state: stale, startedAt: start, lost: away)
+            XCTAssertEqual(polls.keys(0, through: 3600), [:])
+            polls.lost = home
+            XCTAssertEqual(polls.keys(3660, through: 5400), [3960: [key]])
+        }
+        // 240 s counted before leaving does not carry over.
+        var polls = Polls(state: stale, startedAt: start, lost: cut)
+        XCTAssertEqual(polls.keys(0, through: 240), [:])
+        polls.lost = away
+        XCTAssertEqual(polls.keys(300, through: 600), [:])
+        polls.lost = cut
+        XCTAssertEqual(polls.keys(660, through: 1200), [960: ["orch|unreachable"]])
+    }
+
+    func testChangingConditionStartsItsOwnFiveMinutes() {
+        let start = date("2026-11-26T09:16:00Z")
+        var polls = Polls(state: quietState(heartbeat: start, age: 600), startedAt: start, lost: cut)
+        XCTAssertEqual(polls.keys(0, through: 240), [:])
+        polls.lost = nil
+        XCTAssertEqual(polls.keys(300, through: 660), [600: ["orch|stale"]])
+        polls.lost = cut
+        XCTAssertEqual(polls.keys(720, through: 1500), [1020: ["orch|unreachable"]])
+    }
+
+    func testFlappingReachabilityDoesNotRepeat() {
+        let start = date("2026-11-26T09:16:00Z")
+        var polls = Polls(state: quietState(heartbeat: start, age: 600), startedAt: start, lost: cut)
+        var said: [String] = []
+        // Six minutes in each condition, over and over, then a change every poll.
+        for i in 0..<120 {
+            let long = [cut, nil, cut, away][(i / 6) % 4]
+            polls.lost = i < 96 ? long : [cut, nil, away][i % 3]
+            said += polls.at(Double(i * 60)).map(\.key)
+        }
+        XCTAssertEqual(said, ["orch|unreachable", "orch|stale"])
+    }
+
+    func testFreshStateResetsBothNotices() {
+        let start = date("2026-11-26T09:16:00Z")
+        var polls = Polls(state: quietState(heartbeat: start, age: 600), startedAt: start, lost: cut)
+        XCTAssertEqual(polls.keys(0, through: 300), [300: ["orch|unreachable"]])
+        polls.lost = nil
+        XCTAssertEqual(polls.keys(360, through: 720), [660: ["orch|stale"]])
+        polls.state = quietState(heartbeat: start.addingTimeInterval(780))
+        XCTAssertEqual(polls.at(780), [])
+        // The same state goes stale 300 s after its heartbeat; each notice is offered again, 300 s after it is first seen.
+        polls.lost = cut
+        XCTAssertEqual(polls.keys(840, through: 1440), [1440: ["orch|unreachable"]])
+        polls.lost = nil
+        XCTAssertEqual(polls.keys(1500, through: 1860), [1800: ["orch|stale"]])
     }
 
     /// A state whose heartbeat is `age` seconds before `now`, with nothing else to announce.

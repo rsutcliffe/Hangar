@@ -39,6 +39,8 @@ struct BackendSnapshot: Sendable {
     var orchestratorSeenOn: String? = nil
     /// This poll read a state file of a version Hangar does not know.
     var orchestratorOtherVersion = false
+    /// Set when this poll did not reach the remote Mac in `orchestratorSeenOn`.
+    var orchestratorLost: OrchestratorState.Lost? = nil
 }
 
 /// Source of raw facts and the place side effects happen. Live = GitHub + Colima, Demo = scripted.
@@ -135,7 +137,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                     for p in SnapshotParser.orchestratorProfiles(in: vmsOrNil ?? [:]) {
                         for n in await hosts.onDemandNames(h, profile: p) { here[n] = label }
                     }
-                    return (out, warning, down, here, OrchestratorState.Read(target: h.target ?? "local", host: reported, text: await stateText))
+                    return (out, warning, down, here, OrchestratorState.Read(target: h.target ?? "local", host: reported, text: await stateText, reached: reached))
                 }
             }
             for await (m, w, down, here, state) in group {
@@ -195,6 +197,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         snap.orchestrator = orchestrator.state
         snap.orchestratorSeenOn = orchestrator.host
         snap.orchestratorOtherVersion = orchestrator.otherVersion
+        snap.orchestratorLost = orchestrator.lost
         snap.warnings = (warnings + repoWarnings).sorted()
         snap.unreachable = unreachable.sorted()
         snap.tokenExpiry = await github.tokenExpiry()
