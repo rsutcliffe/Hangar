@@ -567,13 +567,91 @@ final class UtilisationLogTests: XCTestCase {
         log.record(at: base, runners: [("m4-runner", true)], queueLength: 2, longestWait: 90)
         let json = String(decoding: try JSONEncoder().encode(log), as: UTF8.self)
         XCTAssertTrue(json.contains("m4-runner"))
+        // The one name it may hold is the longest-waiting job's, passed in as `longestWaitJob`; nothing else from a workflow.
         for forbidden in ["repo", "branch", "workflow", "token", "http"] { XCTAssertFalse(json.contains(forbidden), forbidden) }
     }
     func testSummaryText() {
         var b = HourBucket(); b.total = ["a": 4]; b.busy = ["a": 3]; b.peakQueue = 5; b.longestWaitSeconds = 600
-        XCTAssertEqual(CapacityView.summary(hours: [b, nil], runner: "a"), "75% busy")
+        XCTAssertEqual(CapacityView.summary(hours: [b, nil], runner: "a"), "75% busy · seen in 1 of 2 hours")
         XCTAssertEqual(CapacityView.summary(hours: [nil], runner: "a"), "not seen")
-        XCTAssertEqual(CapacityView.queueSummary([b]), "peak 5 queued · longest wait 10m")
+    }
+
+    // A percentage with no history length read as "45% of the day" when it covered one hour of it.
+    func testRunnersNotSeenLatelyAreListedApart() {
+        var log = UtilisationLog()
+        log.record(at: base, runners: [("old", true), ("here", false)], queueLength: 0, longestWait: 0)
+        log.record(at: base + 5 * 3600, runners: [("here", false)], queueLength: 0, longestWait: 0)
+        let hours = log.recent(count: 24, now: base + 5 * 3600)
+        let split = CapacityView.split(["here", "old"], hours: hours)
+        XCTAssertEqual(split.current, ["here"]); XCTAssertEqual(split.past, ["old"])
+        XCTAssertEqual(CapacityView.lastSeen("old", hours: hours), hours.first { $0.bucket?.total["old"] != nil }?.hour)
+    }
+
+    func testARunnerSeenInTheHourBeforeTheLatestIsStillCurrent() {
+        var log = UtilisationLog()
+        log.record(at: base, runners: [("a", true)], queueLength: 0, longestWait: 0)
+        log.record(at: base + 3600, runners: [("b", true)], queueLength: 0, longestWait: 0)
+        // Hangar closed since: "current" is judged from the latest recorded hour, not from now.
+        let split = CapacityView.split(["a", "b"], hours: log.recent(count: 24, now: base + 6 * 3600))
+        XCTAssertEqual(split.current, ["a", "b"]); XCTAssertEqual(split.past, [])
+    }
+
+    // Once every installed runner is gone, later hours hold only on-demand work: the old ones must not stay "current".
+    func testRetiredRunnersArePastOnceOnlyOnDemandWorkIsRecorded() {
+        var log = UtilisationLog()
+        log.record(at: base, runners: [("old", true)], queueLength: 0, longestWait: 0, onDemand: [])
+        for h in 1...5 { log.record(at: base + Double(h) * 3600, runners: [], queueLength: 0, longestWait: 0, onDemand: ["iMac · a-plain"]) }
+        let split = CapacityView.split(["old"], hours: log.recent(count: 24, now: base + 5 * 3600))
+        XCTAssertEqual(split.current, []); XCTAssertEqual(split.past, ["old"])
+    }
+
+    // On-demand runners did all the queued work and appeared nowhere in Capacity.
+    func testOnDemandJobsRunningAreRecordedByMacAndSet() {
+        var log = UtilisationLog()
+        log.record(at: base, runners: [], queueLength: 0, longestWait: 0, onDemand: ["iMac · a-plain", "iMac · a-plain", "mac-mini · b-stack"])
+        log.record(at: base + 60, runners: [], queueLength: 0, longestWait: 0, onDemand: ["iMac · a-plain"])
+        log.record(at: base + 120, runners: [], queueLength: 0, longestWait: 0, onDemand: [])
+        let hours = log.recent(count: 24, now: base + 120)
+        XCTAssertEqual(UtilisationLog.onDemandAverage(hours.last!.bucket, group: "iMac · a-plain")!, 1.0, accuracy: 0.001)
+        XCTAssertEqual(UtilisationLog.onDemandAverage(hours.last!.bucket, group: "mac-mini · b-stack")!, 1.0 / 3, accuracy: 0.001)
+        XCTAssertEqual(log.onDemandGroups, ["iMac · a-plain", "mac-mini · b-stack"])
+        XCTAssertEqual(CapacityView.onDemandSummary(hours.map(\.bucket), group: "iMac · a-plain"), "average 1.0 running · peak 2 · recorded in 1 of 24 hours")
+    }
+
+    func testAnHourRecordedBeforeOnDemandWasCountedIsNotZero() {
+        var b = HourBucket(); b.total = ["a": 4]
+        XCTAssertNil(UtilisationLog.onDemandAverage(b, group: "iMac · a-plain"))
+        XCTAssertEqual(CapacityView.onDemandSummary([b], group: "iMac · a-plain"), "not recorded")
+    }
+
+    func testBusyOnDemandRunnersAreGroupedWithAnUnknownMacNamed() {
+        let runners = [OnDemandRunner(name: "x-plain-1795691053763142000", repo: "r", set: "x-plain", busy: true, job: nil, host: "iMac"),
+                       OnDemandRunner(name: "x-plain-1795691053763142001", repo: "r", set: "x-plain", busy: false, job: nil, host: "iMac"),
+                       OnDemandRunner(name: "y-stack-1795691053763142002", repo: "r", set: "y-stack", busy: true, job: nil, host: nil)]
+        XCTAssertEqual(UtilisationLog.onDemandKeys(runners), ["iMac · x-plain", "Mac not known · y-stack"])
+    }
+
+    func testLongestWaitKeepsTheJobAndTimeOfThatPeak() {
+        var log = UtilisationLog()
+        log.record(at: base, runners: [], queueLength: 1, longestWait: 600, longestWaitJob: "web · CI / build")
+        log.record(at: base + 60, runners: [], queueLength: 1, longestWait: 30, longestWaitJob: "web · other")
+        let hours = log.recent(count: 1, now: base)
+        XCTAssertEqual(hours[0].bucket?.longestWaitJob, "web · CI / build")
+        XCTAssertEqual(hours[0].bucket?.longestWaitAt, base)
+        XCTAssertEqual(CapacityView.queueSummary(hours, format: { _ in "T" }), "peak 1 queued · longest wait 10m (web · CI / build, T)")
+    }
+
+    func testLongestWaitFromAnOlderHistoryNamesItsHour() {
+        var b = HourBucket(); b.peakQueue = 5; b.longestWaitSeconds = 600
+        XCTAssertEqual(CapacityView.queueSummary([(hour: base, bucket: b)], format: { _ in "H" }), "peak 5 queued · longest wait 10m (in the hour from H)")
+    }
+
+    // The saved history must survive the new fields: a decode failure would silently wipe eight days.
+    func testHistorySavedByTheLastVersionStillLoads() throws {
+        let old = #"{"hours":{"500000":{"busy":{"a":1},"total":{"a":2},"peakQueue":3,"longestWaitSeconds":9}}}"#
+        let log = try JSONDecoder().decode(UtilisationLog.self, from: Data(old.utf8))
+        XCTAssertEqual(log.hours[500000]?.peakQueue, 3)
+        XCTAssertNil(log.hours[500000]?.onDemandPolls)
     }
 }
 
@@ -1573,3 +1651,51 @@ final class RepoMemoryTests: XCTestCase {
         XCTAssertEqual(merged, [Ref(owner: "good", repo: "repo")])
     }
 }
+
+final class OnDemandFailureTests: XCTestCase {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func job(_ id: Int, runner: String?, conclusion: String? = "failure", ago: TimeInterval = 60, labels: [String] = ["a-plain"]) -> GHJob {
+        GHJob(id: id, runId: 1, repo: "web", workflow: "CI", runNumber: 7, branch: "main", status: "completed", conclusion: conclusion,
+              labels: labels, runnerName: runner, createdAt: now - 900, startedAt: now - 600, completedAt: now - ago,
+              steps: [GHJob.Step(number: 1, status: "completed", conclusion: "success", name: "Checkout"),
+                      GHJob.Step(number: 2, status: "completed", conclusion: "failure", name: "Run tests")],
+              name: "unit", htmlURL: "https://github.com/o/web/actions/runs/1/job/\(id)")
+    }
+
+    // Failed on-demand jobs reached neither Recent failures nor a notification.
+    func testAFailedJobOnAnOnDemandRunnerIsAFailure() {
+        let found = LiveBackend.onDemandFailures(jobs: [job(1, runner: "a-plain-1795691053763142000")], now: now)
+        XCTAssertEqual(found.map(\.set), ["a-plain"])
+        XCTAssertEqual(found.first?.job.failedStepName, "Run tests")
+        XCTAssertEqual(found.first?.failedAt, now - 60)
+    }
+
+    func testOtherJobsAreNotOnDemandFailures() {
+        let jobs = [job(1, runner: "a-plain-1795691053763142000", conclusion: "success"),
+                    job(2, runner: "a-plain-1795691053763142000", conclusion: "cancelled"),
+                    job(3, runner: "arm-01", labels: ["self-hosted"]),
+                    job(4, runner: "a-plain-1795691053763142000", labels: ["ubuntu-latest"]),
+                    job(5, runner: nil),
+                    job(6, runner: "a-plain-1795691053763142000", ago: 601)]
+        XCTAssertEqual(LiveBackend.onDemandFailures(jobs: jobs, now: now).count, 0)
+    }
+
+    func testAJobListedTwiceIsOneFailure() {
+        let j = job(1, runner: "a-plain-1795691053763142000")
+        XCTAssertEqual(LiveBackend.onDemandFailures(jobs: [j, j], now: now).count, 1)
+    }
+
+    @MainActor
+    func testNewFailuresAreRecordedOnceAndRepeatsDoNotNotifyAgain() {
+        var log = FailureLog()
+        let first = LiveBackend.onDemandFailures(jobs: [job(1, runner: "a-plain-1795691053763142000", ago: 120)], now: now)
+        XCTAssertEqual(MonitorStore.record(first, into: &log, now: now).map(\.job.id), [1], "new: notify")
+        XCTAssertEqual(MonitorStore.record(first, into: &log, now: now).count, 0, "seen again: nothing")
+        let again = LiveBackend.onDemandFailures(jobs: [job(2, runner: "a-plain-1795691053763142001")], now: now)
+        XCTAssertEqual(MonitorStore.record(again, into: &log, now: now).count, 0, "same job failing again: recorded, quiet")
+        XCTAssertEqual(log.entries.count, 2)
+        XCTAssertEqual(log.entries.first?.runner, "a-plain")
+    }
+}
+

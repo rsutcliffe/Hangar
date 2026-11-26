@@ -1,6 +1,14 @@
 import Foundation
 
+/// A job that failed on an on-demand runner. It has no card, so it is carried to the failure list and notifications apart.
+struct OnDemandFailure: Sendable {
+    var set: String
+    var job: ActiveJob
+    var failedAt: Date
+}
+
 struct BackendSnapshot: Sendable {
+    var onDemandFailures: [OnDemandFailure] = []
     var runners: [RunnerObservation]
     var queue: [QueuedJob]
     /// Live runners the orchestrator started for single jobs; they have no folder on any host, so they come from GitHub's list.
@@ -271,6 +279,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
             }
         }
         var snap = BackendSnapshot(runners: obs, queue: queue(from: jobs, runners: runners))
+        snap.onDemandFailures = onDemandFailures(jobs: jobs, now: now)
         snap.onDemand = onDemandRunners(runners: runners, jobs: jobs, known: Set(machines.flatMap { $0.snap.runners }.map { "\($0.repo)/\($0.name)" }), hostOf: hostOf)
         return snap
     }
@@ -283,6 +292,20 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
             let mine = jobs.first { $0.status == "in_progress" && $0.runnerName == r.name && $0.repo == r.repo }
             return OnDemandRunner(name: r.name, repo: r.repo, set: set, busy: r.busy, job: mine.map { activeJob($0, lastOutput: nil) }, host: hostOf[r.name])
         }.sorted { $0.name < $1.name }
+    }
+
+    /// Jobs that failed in the last 10 minutes on an on-demand runner, oldest first. They come from the jobs already read, and
+    /// no more are asked for, so some are never seen: only runs still going, or that ended as failed in the same window, have
+    /// their jobs read. Missed: a run that ended cancelled or successful before a poll saw the failed job; a long run that has
+    /// left the newest 20 and ends between two polls; and jobs past the first 100 of a run.
+    static func onDemandFailures(jobs: [GHJob], now: Date) -> [OnDemandFailure] {
+        var seen = Set<Int>()
+        return jobs.compactMap { j -> OnDemandFailure? in
+            guard j.conclusion == "failure", QueueAnalysis.isOnDemand(labels: j.labels), let done = j.completedAt,
+                  now.timeIntervalSince(done) < 600, let set = j.runnerName.flatMap(OnDemandRunner.setName(of:)),
+                  seen.insert(j.id).inserted else { return nil }
+            return OnDemandFailure(set: set, job: activeJob(j, lastOutput: done), failedAt: done)
+        }.sorted { $0.failedAt < $1.failedAt }
     }
 
     /// The keys of jobs whose newest completed run on this runner succeeded. Only the newest counts: a success older than a failure

@@ -1,11 +1,23 @@
 import Foundation
 
-/// One hour of observations. Counts only: no job names, repos, or anything else from a workflow.
+/// How many on-demand runners of one set on one Mac were running jobs: summed over the hour's polls, and the most at once.
+struct GroupUse: Codable, Equatable, Sendable {
+    var sum = 0
+    var peak = 0
+}
+
+/// One hour of observations. Counts and names, never output: runner, Mac and set names, and the job that waited longest
+/// (repo, workflow and job name).
+/// Fields added after the first version are optional, so a saved history still loads.
 struct HourBucket: Codable, Equatable, Sendable {
     var busy: [String: Int] = [:]       // runner -> polls seen busy
     var total: [String: Int] = [:]      // runner -> polls seen at all
     var peakQueue = 0
     var longestWaitSeconds = 0
+    var longestWaitJob: String? = nil
+    var longestWaitAt: Date? = nil
+    var onDemandPolls: Int? = nil               // polls that counted on-demand jobs; nil for hours saved before they were counted
+    var onDemand: [String: GroupUse]? = nil     // "Mac · set" -> jobs running
 }
 
 /// Hourly utilisation history for the Capacity window, kept on disk for 8 days.
@@ -17,7 +29,8 @@ struct UtilisationLog: Codable, Equatable, Sendable {
     static func key(_ date: Date) -> Int { Int(date.timeIntervalSince1970 / 3600) }
 
     /// Record one poll. `busy` is the runners currently running or stalled with a job.
-    mutating func record(at date: Date, runners: [(id: String, busy: Bool)], queueLength: Int, longestWait: TimeInterval) {
+    mutating func record(at date: Date, runners: [(id: String, busy: Bool)], queueLength: Int, longestWait: TimeInterval,
+                         longestWaitJob: String? = nil, onDemand: [String]? = nil) {
         let k = Self.key(date)
         var b = hours[k] ?? HourBucket()
         for r in runners {
@@ -25,7 +38,19 @@ struct UtilisationLog: Codable, Equatable, Sendable {
             if r.busy { b.busy[r.id, default: 0] += 1 }
         }
         b.peakQueue = max(b.peakQueue, queueLength)
-        b.longestWaitSeconds = max(b.longestWaitSeconds, Int(longestWait))
+        if Int(longestWait) > b.longestWaitSeconds {
+            b.longestWaitSeconds = Int(longestWait); b.longestWaitJob = longestWaitJob; b.longestWaitAt = date
+        }
+        if let onDemand {
+            b.onDemandPolls = (b.onDemandPolls ?? 0) + 1
+            var use = b.onDemand ?? [:]
+            for (group, running) in Dictionary(onDemand.map { ($0, 1) }, uniquingKeysWith: +) {
+                var u = use[group] ?? GroupUse()
+                u.sum += running; u.peak = max(u.peak, running)
+                use[group] = u
+            }
+            b.onDemand = use
+        }
         hours[k] = b
         prune(now: date)
     }
@@ -49,6 +74,19 @@ struct UtilisationLog: Codable, Equatable, Sendable {
         guard let b, let t = b.total[runner], t > 0 else { return nil }
         return Double(b.busy[runner] ?? 0) / Double(t)
     }
+
+    /// Average jobs of the group running during the hour; nil if on-demand jobs were not counted then.
+    static func onDemandAverage(_ b: HourBucket?, group: String) -> Double? {
+        guard let b, let polls = b.onDemandPolls, polls > 0 else { return nil }
+        return Double(b.onDemand?[group]?.sum ?? 0) / Double(polls)
+    }
+
+    /// One "Mac · set" entry for each on-demand runner that is running a job.
+    static func onDemandKeys(_ runners: [OnDemandRunner]) -> [String] {
+        runners.filter { $0.busy || $0.job != nil }.map { "\($0.host ?? "Mac not known") · \($0.set)" }
+    }
+
+    var onDemandGroups: [String] { Array(Set(hours.values.flatMap { $0.onDemand.map { Array($0.keys) } ?? [] })).sorted() }
 
     var runnerIDs: [String] { Array(Set(hours.values.flatMap { $0.total.keys })).sorted() }
 
@@ -81,7 +119,9 @@ struct UtilisationLog: Codable, Equatable, Sendable {
             let working = (9...18).contains(hour)
             for poll in 0..<10 {
                 let runners = ids.enumerated().map { (i, id) in (id: id, busy: working ? (poll + i) % 4 != 0 : (poll + i) % 9 == 0) }
-                log.record(at: t, runners: runners, queueLength: working ? (poll % 5) + (h % 3) : 0, longestWait: working ? Double(60 * ((poll % 6) + 1) * (1 + h % 3)) : 0)
+                let onDemand = working ? Array(repeating: "mac-mini · web-plain", count: 1 + (poll + h) % 3) + (poll % 2 == 0 ? ["iMac · api-stack"] : []) : []
+                log.record(at: t, runners: runners, queueLength: working ? (poll % 5) + (h % 3) : 0, longestWait: working ? Double(60 * ((poll % 6) + 1) * (1 + h % 3)) : 0,
+                           longestWaitJob: "web · CI / unit-tests", onDemand: onDemand)
             }
         }
         return log
