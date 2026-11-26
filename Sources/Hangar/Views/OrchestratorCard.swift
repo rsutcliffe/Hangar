@@ -66,12 +66,15 @@ struct OrchestratorCard: View {
     /// A date as the file names its days.
     nonisolated static func utcDay(_ date: Date) -> String { date.formatted(.iso8601.year().month().day()) }
 
-    /// The runs-weighted mean wait over the days `include` accepts, as text; nil when none of them has a run.
+    /// The runs-weighted mean wait over the days `include` accepts, as text; nil when none of them has a recorded wait.
     nonisolated static func typicalWait(days: [OrchestratorState.Day]?, include: (String) -> Bool) -> String? {
         var runs = 0.0, total = 0.0                 // Double: numbers from a file must not be able to overflow
         for d in days ?? [] where d.date.map(include) == true {
             for set in (d.sets ?? [:]).values {
                 guard let n = set.runs, n > 0, let wait = set.waitP50Sec else { continue }
+                // The file writes zeros when it recorded no wait. Samples (today only) or a figure above zero show it did.
+                // shortcut: a closed day whose recorded p90 was under a second is left out too; the file keeps no sample count.
+                guard set.waitSamplesSec?.isEmpty == false || wait > 0 || (set.waitP90Sec ?? 0) > 0 else { continue }
                 runs += Double(n); total += Double(n) * Double(wait)
             }
         }

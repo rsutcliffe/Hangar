@@ -2242,6 +2242,30 @@ final class OrchestratorStateTests: XCTestCase {
         XCTAssertEqual(OrchestratorCard.waitLine(days: days, now: now), "Typical wait today 20s, previous 7 days 2m 55s")
     }
 
+    /// A set with runs but no wait recorded is written with zero figures; that is "no figure", not a wait of 0s.
+    func testRunsWithNoRecordedWaitGiveNoFigure() {
+        let now = date("2026-11-26T09:16:00Z")
+        let unmeasured = OrchestratorState.SetNumbers(runs: 35, waitP50Sec: 0, waitP90Sec: 0)
+        XCTAssertNil(OrchestratorCard.waitLine(days: [.init(date: "2026-11-26", sets: ["a": unmeasured])], now: now))
+        let days = [OrchestratorState.Day(date: "2026-11-25", sets: ["a": unmeasured]),
+                    .init(date: "2026-11-26", sets: ["a": unmeasured, "b": .init(runs: 2, waitP50Sec: 60, waitP90Sec: 70, waitSamplesSec: [50, 70])])]
+        XCTAssertEqual(OrchestratorCard.waitLine(days: days, now: now), "Typical wait today 1m")
+    }
+
+    /// A measured wait under a second is a real 0s: today's samples show it was recorded.
+    func testRecordedZeroWaitIsShown() {
+        let set = OrchestratorState.SetNumbers(runs: 3, waitP50Sec: 0, waitP90Sec: 0, waitSamplesSec: [0, 0])
+        XCTAssertEqual(OrchestratorCard.waitLine(days: [.init(date: "2026-11-26", sets: ["a": set])], now: date("2026-11-26T09:16:00Z")),
+                       "Typical wait today 0s")
+    }
+
+    /// A closed day keeps no samples, so a p90 above zero is what shows its zero median was measured.
+    func testClosedDayWithZeroMedianStillCompares() {
+        let days = [OrchestratorState.Day(date: "2026-11-25", sets: ["a": .init(runs: 3, waitP50Sec: 0, waitP90Sec: 40)]),
+                    .init(date: "2026-11-26", sets: ["a": .init(runs: 2, waitP50Sec: 60, waitP90Sec: 70, waitSamplesSec: [50, 70])])]
+        XCTAssertEqual(OrchestratorCard.waitLine(days: days, now: date("2026-11-26T09:16:00Z")), "Typical wait today 1m, previous 7 days 0s")
+    }
+
     func testNoWaitHistoryShowsNoComparison() {
         let now = date("2026-11-26T09:16:00Z")
         let today = OrchestratorState.Day(date: "2026-11-26", sets: ["a": .init(runs: 2, waitP50Sec: 60)])
