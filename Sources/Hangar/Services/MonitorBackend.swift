@@ -294,8 +294,10 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         }.sorted { $0.name < $1.name }
     }
 
-    /// Jobs that failed in the last 10 minutes on an on-demand runner, oldest first. They come from the jobs already read:
-    /// those of runs still going, and of runs that failed in the same window.
+    /// Jobs that failed in the last 10 minutes on an on-demand runner, oldest first. They come from the jobs already read, and
+    /// no more are asked for, so some are never seen: only runs still going, or that ended as failed in the same window, have
+    /// their jobs read. Missed: a run that ended cancelled or successful before a poll saw the failed job; a long run that has
+    /// left the newest 20 and ends between two polls; and jobs past the first 100 of a run.
     static func onDemandFailures(jobs: [GHJob], now: Date) -> [OnDemandFailure] {
         var seen = Set<Int>()
         return jobs.compactMap { j -> OnDemandFailure? in

@@ -4,9 +4,9 @@ Each release's notes are the section for its version below; `scripts/release.sh 
 
 ## 0.1.21 - 2026-11-26
 
-- The Capacity window now counts on-demand runners. It showed only runners installed on your Macs, so while on-demand runners worked through a long queue every bar read as idle. A new section shows the average and most jobs running in each hour, by Mac and job queue. It starts from this version, and counts while Hangar is open.
-- Failed jobs on on-demand runners now appear under Recent failures and send a notification, with the same rule that stops a job that keeps failing from alerting each time. Hangar sees them while it is open: a job that failed more than 10 minutes before a poll can be missed. Stall alerts are still for runners with their own card.
-- Each runner's busy percentage now says how many of the 24 hours it covers, and runners no longer seen are listed apart as past runners. A percentage from a single hour read like a whole day's.
+- The Capacity window now counts on-demand runners. It showed only runners installed on your Macs, so while on-demand runners worked through a long queue every bar read as idle. A new section shows, by Mac and job queue, a bar for the average number of jobs running in each hour, with the average and the most at once over the hours recorded. It starts from this version, and counts while Hangar is open.
+- Failed jobs on on-demand runners now appear under Recent failures and send a notification, with the same rule that stops a job that keeps failing from alerting each time. Not every failure is seen. Hangar sees them only while it is open, and can miss a job that failed more than 10 minutes before a poll, one in a run that ended cancelled or successful before Hangar saw the failed job, one in a long run that has dropped out of the newest 20 and ended between two polls, and jobs past the first 100 of a run. Check GitHub for the full record. Stall alerts are still for runners with their own card.
+- Each runner's busy percentage now says how many of the 24 hours it covers, and runners seen in the last 24 hours but not lately are listed apart as past runners. A percentage from a single hour read like a whole day's.
 - The longest wait now says when it happened and which job it was. For hours recorded by an earlier version it names the hour.
 
 ## 0.1.20 - 2026-11-26

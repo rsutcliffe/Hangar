@@ -65,7 +65,7 @@ struct CapacityView: View {
         let top = max(1, groups.flatMap { g in hours.compactMap { UtilisationLog.onDemandAverage($0.bucket, group: g) } }.max() ?? 1)
         sectionTitle("On-demand runners",
                      note: groups.isEmpty ? "No on-demand jobs recorded. Hangar counts them from version 0.1.21, while it is open."
-                                          : "Average jobs running in each hour, by Mac and job queue. A full bar is \(String(format: "%.1f", top)) jobs.")
+                                          : "Bars: average jobs running in each hour, by Mac and job queue. A full bar is \(String(format: "%.1f", top)) jobs.")
         ForEach(groups, id: \.self) { group in
             VStack(alignment: .leading, spacing: 4) {
                 Text(group).font(.system(size: 12, weight: .semibold))
@@ -101,7 +101,7 @@ struct CapacityView: View {
                         HStack(spacing: 8) {
                             Text(Format.shortDateTime(f.at)).frame(width: 110, alignment: .leading).foregroundStyle(Theme.muted)
                                 .help(Format.duration(Date().timeIntervalSince(f.at)) + " ago")
-                            Text(f.runner).fontWeight(.semibold).frame(width: 110, alignment: .leading)
+                            Text(f.runner).fontWeight(.semibold).frame(width: 110, alignment: .leading).lineLimit(1).truncationMode(.middle).help(f.runner)
                             Text("\(f.title) · \(f.reason)").foregroundStyle(Theme.problemText).lineLimit(1).truncationMode(.tail)
                             Spacer(minLength: 0)
                         }
@@ -115,7 +115,7 @@ struct CapacityView: View {
     /// Runners seen in the latest recorded hour or the one before it, and the rest. Judged from the history, not from the clock,
     /// so a Mac that had Hangar closed overnight does not move every runner to the past.
     static func split(_ ids: [String], hours: [(hour: Date, bucket: HourBucket?)]) -> (current: [String], past: [String]) {
-        let latest = hours.lastIndex { !($0.bucket?.total.isEmpty ?? true) } ?? 0
+        let latest = hours.lastIndex { $0.bucket != nil } ?? 0
         let recent = hours[max(0, latest - 1)...latest]
         let current = ids.filter { id in recent.contains { $0.bucket?.total[id] != nil } }
         return (current, ids.filter { !current.contains($0) })

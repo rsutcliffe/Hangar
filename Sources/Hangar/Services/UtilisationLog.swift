@@ -6,7 +6,8 @@ struct GroupUse: Codable, Equatable, Sendable {
     var peak = 0
 }
 
-/// One hour of observations. Counts, and one name: the job that waited longest (repo, workflow and job name, never output).
+/// One hour of observations. Counts and names, never output: runner, Mac and set names, and the job that waited longest
+/// (repo, workflow and job name).
 /// Fields added after the first version are optional, so a saved history still loads.
 struct HourBucket: Codable, Equatable, Sendable {
     var busy: [String: Int] = [:]       // runner -> polls seen busy

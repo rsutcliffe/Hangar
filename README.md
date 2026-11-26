@@ -35,7 +35,7 @@ On first launch macOS asks for two permissions, and the window explains them: **
 - **The queue** shows how long each job has waited, which runners can take it, and flags jobs that no online runner can.
 - **Notifications that do not flood.** Stalls, failures, outages and restarts that do not come back each notify once. A job that keeps failing sends one notification, not one per failure. What has been announced is remembered across restarts, each kind of alert has a cooldown, and a burst is folded into one summary. Optional quiet hours hold the non-urgent ones. A Dock badge counts runners that need attention.
 - **Unreachable hosts stay visible**, greyed out with when they were last seen. A warning appears before the GitHub token expires. A repository the token cannot read is a warning, and everything else keeps updating.
-- **Capacity window** (Window ▸ Capacity, ⌥⌘C): 24 hours of use per runner and queue length, plus recent failures with the date, time and step, each linking to the job. History is stored locally.
+- **Capacity window** (Window ▸ Capacity, ⌥⌘C): 24 hours of use per runner, on-demand jobs by Mac and job queue (counted while Hangar is open), and queue length, plus recent failures with the date, time and step, each linking to the job. History is stored locally.
 - **Optional: protect running jobs.** While a Mac reports memory pressure, its idle runners are paused so the job already running can finish; a running job is never touched. Off by default, and it only works while Hangar is open.
 - Optional launch at login.
 

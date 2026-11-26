@@ -596,6 +596,15 @@ final class UtilisationLogTests: XCTestCase {
         XCTAssertEqual(split.current, ["a", "b"]); XCTAssertEqual(split.past, [])
     }
 
+    // Once every installed runner is gone, later hours hold only on-demand work: the old ones must not stay "current".
+    func testRetiredRunnersArePastOnceOnlyOnDemandWorkIsRecorded() {
+        var log = UtilisationLog()
+        log.record(at: base, runners: [("old", true)], queueLength: 0, longestWait: 0, onDemand: [])
+        for h in 1...5 { log.record(at: base + Double(h) * 3600, runners: [], queueLength: 0, longestWait: 0, onDemand: ["iMac · a-plain"]) }
+        let split = CapacityView.split(["old"], hours: log.recent(count: 24, now: base + 5 * 3600))
+        XCTAssertEqual(split.current, []); XCTAssertEqual(split.past, ["old"])
+    }
+
     // On-demand runners did all the queued work and appeared nowhere in Capacity.
     func testOnDemandJobsRunningAreRecordedByMacAndSet() {
         var log = UtilisationLog()
