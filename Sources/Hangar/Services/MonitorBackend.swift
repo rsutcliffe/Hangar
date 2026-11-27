@@ -374,7 +374,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         let current = j.steps.first { $0.status == "in_progress" }?.number
             ?? (j.steps.filter { $0.status == "completed" }.count + 1)
         let started = j.startedAt ?? j.createdAt
-        return ActiveJob(id: j.id, repo: j.repo, workflow: j.workflow, runNumber: j.runNumber, branch: j.branch,
+        return ActiveJob(id: j.id, repo: j.repo, workflow: j.workflow, runNumber: j.runNumber, prNumber: j.prNumber, branch: j.branch,
                          totalSteps: j.steps.count, currentStep: min(current, max(j.steps.count, 1)),
                          startedAt: started, lastOutputAt: max(lastOutput ?? started, started),     // a log older than the job is the previous job's
                          failedStep: j.conclusion == "failure" ? (failedStep ?? current) : nil, exitCode: nil,
@@ -391,6 +391,7 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
                 var q = QueuedJob(id: j.id, repo: j.repo, workflow: j.workflow, branch: j.branch,
                                   runNumber: j.runNumber, arch: arch, queuedAt: j.createdAt, job: j.name, labels: j.labels)
                 q.url = GitHubLink.safe(j.htmlURL)
+                q.prNumber = j.prNumber
                 q.onDemand = QueueAnalysis.isOnDemand(labels: j.labels)
                 if !q.onDemand, let runners {
                     q.eligible = QueueAnalysis.eligible(labels: j.labels, repo: j.repo, runners: runners)

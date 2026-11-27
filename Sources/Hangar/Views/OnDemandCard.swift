@@ -9,7 +9,7 @@ struct OnDemandCard: View {
     /// What a row says about the runner's job.
     static func status(for r: OnDemandRunner) -> String {
         guard let j = r.job else { return r.busy ? "Running a job" : "Waiting for a job" }
-        return "\(j.workflow) · \(j.repo) #\(j.runNumber) · \(j.branch)"
+        return "\(j.workflow) · \(j.repo) \(j.numberLabel) · \(j.branch)"
     }
 
     var body: some View {

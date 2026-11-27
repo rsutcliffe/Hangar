@@ -87,7 +87,7 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         switch event {
         case .stalled:
             c.title = "Runner stalled"
-            c.body = "\(runner) has had no output for \(silentMinutes) minutes on \(job.workflow) · \(job.repo) #\(job.runNumber)."
+            c.body = "\(runner) has had no output for \(silentMinutes) minutes on \(job.workflow) · \(job.repo) \(job.numberLabel)."
         case .failed:
             c.title = "Job failed"
             let step = job.failedStep ?? job.currentStep

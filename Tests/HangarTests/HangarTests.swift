@@ -1011,6 +1011,21 @@ final class GitHubClientTests: XCTestCase {
         return #"{"workflow_runs":[\#(items.joined(separator: ","))]}"#
     }
 
+    /// People know a pull request by its number, not by the CI run's.
+    func testARunForAPullRequestIsNamedByItsNumber() {
+        func parsed(_ extra: String) -> GitHubService.Run? {
+            let json = #"{"workflow_runs":[{"id":1,"name":"CI","run_number":4402,"head_branch":"b","status":"queued"\#(extra)}]}"#
+            return GitHubService.parseRuns(try! JSONSerialization.jsonObject(with: Data(json.utf8))).first
+        }
+        XCTAssertEqual(parsed(#","event":"pull_request","pull_requests":[{"number":3158}]"#)?.prNumber, 3158)
+        XCTAssertNil(parsed(#","event":"pull_request","pull_requests":[]"#)?.prNumber, "GitHub lists none for a fork")
+        XCTAssertNil(parsed(#","event":"push","pull_requests":[{"number":3158}]"#)?.prNumber, "a push is not that pull request's run")
+        var job = QueuedJob(id: 1, repo: "app", workflow: "CI", branch: "b", runNumber: 4402, arch: .arm64, queuedAt: Date(), labels: [])
+        XCTAssertEqual(job.numberLabel, "#4402")
+        job.prNumber = 3158
+        XCTAssertEqual(job.numberLabel, "PR 3158")
+    }
+
     func testAQueuedRunIsReadOnceUntilItChanges() async throws {
         let base = "/repos/example-org/widgets/actions/runs"
         StubURLProtocol.replies[base + "?per_page=20"] = .init(body: runsBody([(9, "2026-10-14T10:00:00Z")]))

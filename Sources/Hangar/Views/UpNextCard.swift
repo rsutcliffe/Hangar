@@ -31,7 +31,7 @@ struct UpNextCard: View {
                     HStack(spacing: 12) {
                         JobLink(url: j.url) { VStack(alignment: .leading, spacing: 2) {
                             (Text(verbatim: "\(j.repo) · \(j.workflow)" + (j.job.isEmpty || j.job == j.workflow ? "" : " / \(j.job)")).fontWeight(.semibold)
-                                + Text(verbatim: " #\(j.runNumber) · \(j.branch)").foregroundColor(Theme.muted))
+                                + Text(verbatim: " \(j.numberLabel) · \(j.branch)").foregroundColor(Theme.muted))
                                 .font(.system(size: 12)).lineLimit(1).truncationMode(.tail)
                             if let note = Self.note(for: j) {
                                 Text(note.text).font(.system(size: 10, weight: note.stuck ? .semibold : .regular))
