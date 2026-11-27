@@ -26,16 +26,25 @@ struct MonitorWindow: View {
                     UpNextCard(queue: store.queue, now: ctx.date)
                     // Tall, so it sits below the work in progress.
                     if let t = store.orchestrator?.throughputSummary(failedSteps: store.failedSteps, now: ctx.date) { ThroughputCard(summary: t) }
-                    // A Grid (not a lazy one) so the cards in a row share the tallest card's height.
-                    Grid(horizontalSpacing: 10, verticalSpacing: 10) {
-                        ForEach(Array(store.runners.chunked(into: 3).enumerated()), id: \.offset) { _, row in
-                            GridRow {
-                                ForEach(row) { r in
-                                    RunnerCard(runner: r, now: ctx.date, dimmed: store.isStale(now: ctx.date),
-                                               onRestart: { store.restart(r.id) }, onDrain: { store.toggleDrain(r.id) })
+                    if !store.runners.isEmpty {
+                        CollapsibleSection(.runners, title: "Runners",
+                                           summary: .runners(total: store.runners.count,
+                                                             problems: ProblemBadge.count(store.runners, outages: store.outageTracker.outages)),
+                                           card: false, spacing: 4) {
+                            Text("\(store.runners.count)").font(.system(size: 11)).monospacedDigit().foregroundStyle(Theme.muted)
+                        } content: {
+                            // A Grid (not a lazy one) so the cards in a row share the tallest card's height.
+                            Grid(horizontalSpacing: 10, verticalSpacing: 10) {
+                                ForEach(Array(store.runners.chunked(into: 3).enumerated()), id: \.offset) { _, row in
+                                    GridRow {
+                                        ForEach(row) { r in
+                                            RunnerCard(runner: r, now: ctx.date, dimmed: store.isStale(now: ctx.date),
+                                                       onRestart: { store.restart(r.id) }, onDrain: { store.toggleDrain(r.id) })
+                                        }
+                                        // Keep three equal columns when the last row is short.
+                                        ForEach(0..<(3 - row.count), id: \.self) { _ in Color.clear.frame(maxWidth: .infinity) }
+                                    }
                                 }
-                                // Keep three equal columns when the last row is short.
-                                ForEach(0..<(3 - row.count), id: \.self) { _ in Color.clear.frame(maxWidth: .infinity) }
                             }
                         }
                     }

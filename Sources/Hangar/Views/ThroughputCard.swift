@@ -9,8 +9,8 @@ struct ThroughputCard: View {
     let summary: Summary
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Throughput · last 6 hours").font(.system(size: 12, weight: .semibold))
+        CollapsibleSection(.throughput, title: "Throughput · last 6 hours",
+                           summary: .throughput(doneLastHour: summary.doneLastHour, failed6h: summary.failed6h), spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
                 tile("Done, last hour", number(summary.doneLastHour), help: "Jobs completed, whether they passed or failed")
                 tile("Failed, 6 hours", number(summary.failed6h), help: "Workflow runs with a failed job, each counted once")
@@ -25,9 +25,6 @@ struct ThroughputCard: View {
             chart("Jobs waiting, peak per 5 minutes", \.waiting, .line, Theme.running, showsTimes: true)
             if let total = summary.failureTotal { failureList(of: total) }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 14).padding(.horizontal, 16)
-        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: Theme.cardRadius))
     }
 
     private func number(_ n: Int?) -> String { n.map { $0.formatted() } ?? "—" }

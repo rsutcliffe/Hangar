@@ -16,13 +16,9 @@ struct UpNextCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Up next").font(.system(size: 12, weight: .semibold))
-                Spacer()
-                Text("Waiting").font(.system(size: 11)).foregroundStyle(Theme.muted)
-            }
-            .padding(.bottom, 6)
+        CollapsibleSection(.upNext, title: "Up next", summary: .upNext(queue, now: now)) {
+            Text("Waiting").font(.system(size: 11)).foregroundStyle(Theme.muted)
+        } content: {
             if queue.isEmpty {
                 Text("Queue is empty").font(.system(size: 12)).foregroundStyle(Theme.muted).padding(.vertical, 8)
             } else {
@@ -54,7 +50,5 @@ struct UpNextCard: View {
                 }
             }
         }
-        .padding(.vertical, 14).padding(.horizontal, 16)
-        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: Theme.cardRadius))
     }
 }

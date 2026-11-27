@@ -15,13 +15,9 @@ struct OnDemandCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("On-demand runners").font(.system(size: 12, weight: .semibold))
-                Spacer()
-                Text("\(runners.count)").font(.system(size: 11)).monospacedDigit().foregroundStyle(Theme.muted)
-            }
-            .padding(.bottom, 6)
+        CollapsibleSection(.onDemand, title: "On-demand runners", summary: .onDemand(runners)) {
+            Text("\(runners.count)").font(.system(size: 11)).monospacedDigit().foregroundStyle(Theme.muted)
+        } content: {
             ForEach(runners.prefix(6)) { r in
                 Divider().overlay(Theme.line)
                 HStack(spacing: 12) {
@@ -48,7 +44,5 @@ struct OnDemandCard: View {
                 Text("+\(runners.count - 6) more").font(.system(size: 11)).foregroundStyle(Theme.muted).padding(.top, 2)
             }
         }
-        .padding(.vertical, 14).padding(.horizontal, 16)
-        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: Theme.cardRadius))
     }
 }

@@ -43,7 +43,7 @@ final class MonitorStore {
     private var runnerCPUHistory: [String: [Double]] = [:]      // last 3 per-runner CPU samples
     private var lastEnded: [String: Date] = [:]
     private var lastSeen: [String: Date] = [:]
-    private var outageTracker = OutageTracker()
+    private(set) var outageTracker = OutageTracker()
     private var failedRestarts: Set<String> = []
     private var jobHistory = JobHistory.load()
     private(set) var failures = FailureLog.load()
