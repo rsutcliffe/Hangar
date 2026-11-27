@@ -1028,6 +1028,33 @@ final class GitHubClientTests: XCTestCase {
         XCTAssertEqual(jobCalls(), 2, "a changed run is read again")
     }
 
+    /// GitHub can leave a run "queued", with the same `updated_at`, while one of its jobs runs.
+    func testABusyRunnerWithNoJobMakesCachedQueuedRunsBeReadAgain() async throws {
+        let base = "/repos/example-org/widgets/actions/runs"
+        let runs = runsBody([(9, "2026-10-14T10:00:00Z"), (8, "2026-10-14T09:00:00Z")])
+        StubURLProtocol.replies[base + "?per_page=20"] = .init(body: runs)
+        StubURLProtocol.replies[base + "?status=queued&per_page=100"] = .init(body: runs)
+        StubURLProtocol.replies[base + "?status=in_progress&per_page=100"] = .init(body: #"{"workflow_runs":[]}"#)
+        func job(_ id: Int, _ rest: String) -> StubURLProtocol.Reply {
+            .init(body: #"{"jobs":[{"id":\#(id),"name":"unit","labels":["self-hosted"],"created_at":"2026-10-14T08:00:00Z",\#(rest)}]}"#)
+        }
+        StubURLProtocol.replies[base + "/9/jobs?per_page=100"] = job(90, #""status":"queued""#)
+        StubURLProtocol.replies[base + "/8/jobs?per_page=100"] = job(80, #""status":"queued""#)
+        let gh = GitHubService(session: StubURLProtocol.session())
+        func calls(_ run: Int) -> Int { StubURLProtocol.seen.filter { $0.url!.path.hasSuffix("/\(run)/jobs") }.count }
+        _ = try await gh.jobs(owner: "example-org", repo: "widgets", token: "t")
+        StubURLProtocol.replies[base + "/9/jobs?per_page=100"] = job(90, #""status":"in_progress","runner_name":"r1""#)
+        var jobs = try await gh.jobs(owner: "example-org", repo: "widgets", token: "t", busy: ["r1"])
+        XCTAssertEqual(jobs.first { $0.id == 90 }?.runnerName, "r1")
+        XCTAssertEqual(jobs.map(\.id).sorted(), [80, 90])
+        XCTAssertEqual(calls(8), 1, "reading stops once every busy runner has its job")
+        StubURLProtocol.replies[base + "/9/jobs?per_page=100"] = job(90, #""status":"completed","runner_name":"r1""#)
+        jobs = try await gh.jobs(owner: "example-org", repo: "widgets", token: "t")
+        XCTAssertEqual(jobs.first { $0.id == 90 }?.status, "completed", "a queued run with a running job is not cached")
+        XCTAssertEqual(calls(9), 3)
+        XCTAssertEqual(calls(8), 1)
+    }
+
     func testAnOldQueuedRunOutsideTheNewestTwentyIsStillSeen() async throws {
         let base = "/repos/example-org/widgets/actions/runs"
         StubURLProtocol.replies[base + "?per_page=20"] = .init(body: #"{"workflow_runs":[]}"#)
