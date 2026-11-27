@@ -1649,6 +1649,10 @@ final class OnDemandCardTests: XCTestCase {
         XCTAssertEqual(OnDemandCard.status(for: OnDemandRunner(name: "s-1795015470612973000", repo: "app", set: "s", busy: true, job: job)), "CI · app #7 · main")
         XCTAssertEqual(OnDemandCard.status(for: OnDemandRunner(name: "s-1795015470612973000", repo: "app", set: "s", busy: false, job: nil)), "Waiting for a job")
         XCTAssertEqual(OnDemandCard.status(for: OnDemandRunner(name: "s-1795015470612973000", repo: "app", set: "s", busy: true, job: nil)), "Running a job")
+        var shard = job
+        shard.jobName = "Playwright (2)"                                    // one run's shards differ only by this
+        XCTAssertEqual(OnDemandCard.status(for: OnDemandRunner(name: "s-1795015470612973000", repo: "app", set: "s", busy: true, job: shard)),
+                       "CI / Playwright (2) · app #7 · main")
     }
 }
 

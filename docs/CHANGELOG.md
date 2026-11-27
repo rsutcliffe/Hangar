@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.26 - 2026-11-27
+
+- Each on-demand runner row now shows the job's name after the workflow's. Without it, two jobs from one run, such as the parts of a split test suite, looked like the same row twice. In a long row the end of the branch name is what gets cut off.
+
 ## 0.1.25 - 2026-11-27
 
 - A run that belongs to a pull request now shows the pull request's number, as in "PR 12", in place of the CI run's number. This applies to the on-demand runner rows, Up next, runner cards and notifications. Other runs, such as those started by a push to main, keep the run number, and so does a run for which GitHub lists no pull request.
