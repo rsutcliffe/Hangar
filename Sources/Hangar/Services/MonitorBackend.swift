@@ -179,9 +179,9 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
             for r in repos {
                 group.addTask {
                     do {
-                        async let rs = github.runners(owner: r.owner, repo: r.repo, token: token)
-                        async let js = github.jobs(owner: r.owner, repo: r.repo, token: token)
-                        let (runners, jobs) = try await (rs, js)
+                        let runners = try await github.runners(owner: r.owner, repo: r.repo, token: token)
+                        let jobs = try await github.jobs(owner: r.owner, repo: r.repo, token: token,
+                                                         busy: Set(runners.filter { $0.online && $0.busy }.map(\.name)))
                         return (runners.map { var x = $0; x.repo = r.repo; return x }, jobs, nil)
                     } catch {
                         guard let w = Self.repoWarning(repo: r.repo, error: error) else { throw error }

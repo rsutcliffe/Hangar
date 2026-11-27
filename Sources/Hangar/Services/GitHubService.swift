@@ -113,13 +113,13 @@ actor GitHubService {
         return Self.parseRunners(try await get("/repos/\(owner)/\(repo)/actions/runners?per_page=100", token: token))
     }
 
-    /// A queued run's jobs cannot change while the run's own `updated_at` stays the same, so they are read once. This also
+    /// A waiting run's jobs are read once while its `updated_at` stays the same, unless a busy runner has no job. This also
     /// stops a run that GitHub queued without creating any jobs from being asked for again on every poll. Per repo, so each
     /// poll replaces that repo's entries and finished runs drop out.
     private var queuedJobs: [String: [Int: (updated: Date, jobs: [GHJob])]] = [:]
 
     /// Recent runs for a repo, then the jobs for runs that matter (queued, running, recently failed).
-    func jobs(owner: String, repo: String, token: String, now: Date = Date()) async throws -> [GHJob] {
+    func jobs(owner: String, repo: String, token: String, busy: Set<String> = [], now: Date = Date()) async throws -> [GHJob] {
         guard Config.isSafeName(owner), Config.isSafeName(repo) else { throw GitHubError.badURL }
         let base = "/repos/\(owner)/\(repo)/actions/runs"
         // The 20 newest runs hold what is running and what just failed. Queued and in-progress runs are each asked for on their
@@ -135,16 +135,33 @@ actor GitHubService {
         let cached = queuedJobs["\(owner)/\(repo)"] ?? [:]
         var kept: [Int: (updated: Date, jobs: [GHJob])] = [:]
         var out: [GHJob] = []
+        var unchanged: [(run: Run, jobs: [GHJob])] = []
         for run in runs where run.status != "completed" || (run.conclusion == "failure" && now.timeIntervalSince(run.updatedAt) < 600) {
             if run.status == "queued", run.updatedAt != .distantPast, let c = cached[run.id], c.updated == run.updatedAt {
-                kept[run.id] = c; out += c.jobs; continue
+                unchanged.append((run, c.jobs)); continue
             }
             let jobs = Self.parseJobs(try await get(base + "/\(run.id)/jobs?per_page=100", token: token), repo: repo, run: run)
-            if run.status == "queued" { kept[run.id] = (run.updatedAt, jobs) }
+            if Self.canKeep(run, jobs) { kept[run.id] = (run.updatedAt, jobs) }
             out += jobs
+        }
+        // GitHub can start a job and leave its run "queued" with the same `updated_at`. A busy runner with no job shows this,
+        // so unchanged runs are read again until each has one. Runs that had no jobs are tried last.
+        for hit in unchanged.filter({ !$0.jobs.isEmpty }) + unchanged.filter({ $0.jobs.isEmpty }) {
+            if busy.subtracting(out.filter { $0.status == "in_progress" }.compactMap(\.runnerName)).isEmpty {
+                kept[hit.run.id] = (hit.run.updatedAt, hit.jobs); out += hit.jobs
+            } else {
+                let jobs = Self.parseJobs(try await get(base + "/\(hit.run.id)/jobs?per_page=100", token: token), repo: repo, run: hit.run)
+                if Self.canKeep(hit.run, jobs) { kept[hit.run.id] = (hit.run.updatedAt, jobs) }
+                out += jobs
+            }
         }
         queuedJobs["\(owner)/\(repo)"] = kept
         return out
+    }
+
+    /// A job can run on, and end, without its run's `updated_at` moving, so a run with a running job is not kept.
+    private static func canKeep(_ run: Run, _ jobs: [GHJob]) -> Bool {
+        run.status == "queued" && !jobs.contains { $0.status == "in_progress" }
     }
 
     // MARK: parsing (pure, unit-tested)

@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.24 - 2026-11-27
+
+- A job can start while GitHub still calls its whole run "queued". Hangar kept using the job list it had read before the job started, so an on-demand runner showed only "Running a job", and the job could stay under Up next. When a busy runner has no job, Hangar now reads the queued runs again.
+
 ## 0.1.23 - 2026-11-26
 
 - "Typical wait" no longer shows 0s when the orchestrator has recorded no wait times. The Throughput card shows a dash, and the Orchestrator card leaves the line out. The missing wait times themselves are not fixed by this release.
