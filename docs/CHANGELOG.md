@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.25 - 2026-11-27
+
+- A run that belongs to a pull request now shows the pull request's number, as in "PR 12", in place of the CI run's number. This applies to the on-demand runner rows, Up next, runner cards and notifications. Other runs, such as those started by a push to main, keep the run number, and so does a run for which GitHub lists no pull request.
+
 ## 0.1.24 - 2026-11-27
 
 - A job can start while GitHub still calls its whole run "queued". Hangar kept using the job list it had read before the job started, so an on-demand runner showed only "Running a job", and the job could stay under Up next. When a busy runner has no job, Hangar now reads the queued runs again.

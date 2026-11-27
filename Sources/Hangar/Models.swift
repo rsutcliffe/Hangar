@@ -16,11 +16,18 @@ enum Arch: String, Equatable, Sendable {
     var label: String { rawValue }
 }
 
+enum RunLabel {
+    /// The pull request's number when the run belongs to one, otherwise the run's own.
+    static func number(run: Int, pr: Int?) -> String { pr.map { "PR \($0)" } ?? "#\(run)" }
+}
+
 struct ActiveJob: Equatable, Sendable {
     var id: Int
     var repo: String
     var workflow: String
     var runNumber: Int
+    var prNumber: Int? = nil
+    var numberLabel: String { RunLabel.number(run: runNumber, pr: prNumber) }
     var branch: String
     var totalSteps: Int
     var currentStep: Int
@@ -40,7 +47,7 @@ struct ActiveJob: Equatable, Sendable {
         return min(1, max(0, Double(currentStep) / Double(totalSteps)))
     }
 
-    var title: String { "\(workflow) · \(repo) #\(runNumber)" }
+    var title: String { "\(workflow) · \(repo) \(numberLabel)" }
 }
 
 struct Runner: Identifiable, Equatable, Sendable {
@@ -116,6 +123,8 @@ struct QueuedJob: Identifiable, Equatable, Sendable {
     var workflow: String
     var branch: String
     var runNumber: Int
+    var prNumber: Int? = nil
+    var numberLabel: String { RunLabel.number(run: runNumber, pr: prNumber) }
     var arch: Arch
     var queuedAt: Date
     var job = ""

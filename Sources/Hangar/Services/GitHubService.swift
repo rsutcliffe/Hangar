@@ -33,6 +33,7 @@ struct GHJob: Equatable, Sendable {
     var steps: [Step]
     var name = ""
     var htmlURL = ""
+    var prNumber: Int?
     struct Step: Equatable, Sendable { var number: Int; var status: String; var conclusion: String?; var name = "" }
 }
 
@@ -169,6 +170,7 @@ actor GitHubService {
     struct Run: Equatable, Sendable {
         var id: Int; var name: String; var number: Int; var branch: String
         var status: String; var conclusion: String?; var updatedAt: Date
+        var prNumber: Int?
     }
 
     static func date(_ s: Any?) -> Date? {
@@ -191,7 +193,10 @@ actor GitHubService {
             guard let id = r["id"] as? Int else { return nil }
             return Run(id: id, name: r["name"] as? String ?? "", number: r["run_number"] as? Int ?? 0,
                        branch: r["head_branch"] as? String ?? "", status: r["status"] as? String ?? "",
-                       conclusion: r["conclusion"] as? String, updatedAt: date(r["updated_at"]) ?? .distantPast)
+                       conclusion: r["conclusion"] as? String, updatedAt: date(r["updated_at"]) ?? .distantPast,
+                       // Only a pull request's own run: GitHub also lists pull requests against runs for other events.
+                       prNumber: (r["event"] as? String)?.hasPrefix("pull_request") == true
+                           ? (r["pull_requests"] as? [[String: Any]])?.first?["number"] as? Int : nil)
         }
     }
 
@@ -207,7 +212,7 @@ actor GitHubService {
                          branch: run.branch, status: j["status"] as? String ?? "", conclusion: j["conclusion"] as? String,
                          labels: j["labels"] as? [String] ?? [], runnerName: j["runner_name"] as? String,
                          createdAt: created, startedAt: date(j["started_at"]), completedAt: date(j["completed_at"]), steps: steps,
-                         name: j["name"] as? String ?? "", htmlURL: j["html_url"] as? String ?? "")
+                         name: j["name"] as? String ?? "", htmlURL: j["html_url"] as? String ?? "", prNumber: run.prNumber)
         }
     }
 }
