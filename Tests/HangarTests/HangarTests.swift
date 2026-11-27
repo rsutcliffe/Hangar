@@ -2559,3 +2559,59 @@ final class ThroughputTests: XCTestCase {
         XCTAssertEqual(OrchestratorState.spoken("Jobs waiting", points: [], value: \.waiting), "Jobs waiting: no data")
     }
 }
+
+/// A collapsed section is one line, so that line has to carry what is wrong.
+final class SectionSummaryTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_795_000_000)
+
+    func testOrchestratorKeepsItsProblemsInSight() {
+        typealias C = OrchestratorCard
+        XCTAssertEqual(SectionSummary.orchestrator([.noProblems]), SectionSummary(text: "No problems"))
+        let row = C.Row(host: "h", text: "x", age: "1m")
+        XCTAssertEqual(SectionSummary.orchestrator([.problems([row]), .typicalWait("w")]), SectionSummary(problem: "1 problem"))
+        XCTAssertEqual(SectionSummary.orchestrator([.problems([row, row])]), SectionSummary(problem: "2 problems"))
+        XCTAssertEqual(SectionSummary.orchestrator([.notReporting("d")]), SectionSummary(problem: "Orchestrator not reporting"))
+        XCTAssertEqual(SectionSummary.orchestrator([.cannotReach("mini", "d")]), SectionSummary(problem: "Cannot reach mini"))
+        XCTAssertEqual(SectionSummary.orchestrator([.needsUpdate]), SectionSummary(problem: "Hangar needs updating"))
+    }
+
+    func testOnDemandCountsBusyAndWaitingRunners() {
+        func runner(_ n: Int, busy: Bool) -> OnDemandRunner { OnDemandRunner(name: "s-\(n)", repo: "r", set: "s", busy: busy, job: nil) }
+        XCTAssertEqual(SectionSummary.onDemand([runner(1, busy: true), runner(2, busy: true)]), SectionSummary(text: "2 running"))
+        XCTAssertEqual(SectionSummary.onDemand([runner(1, busy: true), runner(2, busy: false)]), SectionSummary(text: "1 running · 1 idle"))
+        XCTAssertEqual(SectionSummary.onDemand([runner(1, busy: false)]), SectionSummary(text: "1 idle"))
+    }
+
+    func testUpNextSaysHowLongAndWhatIsStuck() {
+        func job(_ id: Int, waited: TimeInterval, stuck: Bool = false) -> QueuedJob {
+            var j = QueuedJob(id: id, repo: "r", workflow: "w", branch: "b", runNumber: 1, arch: .arm64,
+                              queuedAt: now.addingTimeInterval(-waited), labels: [])
+            if stuck { j.eligible = [] }
+            return j
+        }
+        XCTAssertEqual(SectionSummary.upNext([], now: now), SectionSummary(text: "Queue is empty"))
+        XCTAssertEqual(SectionSummary.upNext([job(1, waited: 60), job(2, waited: 1800)], now: now),
+                       SectionSummary(text: "2 waiting · longest 30m"))
+        XCTAssertEqual(SectionSummary.upNext([job(1, waited: 60, stuck: true)], now: now),
+                       SectionSummary(text: "1 waiting · longest 1m", problem: "1 stuck"))
+    }
+
+    func testThroughputShowsFailuresApartAndNothingItDoesNotKnow() {
+        XCTAssertEqual(SectionSummary.throughput(doneLastHour: 41, failed6h: 7),
+                       SectionSummary(text: "41 done last hour", problem: "7 failed in 6 hours"))
+        XCTAssertEqual(SectionSummary.throughput(doneLastHour: 3, failed6h: 0), SectionSummary(text: "3 done last hour"))
+        XCTAssertEqual(SectionSummary.throughput(doneLastHour: nil, failed6h: nil), SectionSummary())
+    }
+
+    func testRunnersSayHowManyNeedAttention() {
+        XCTAssertEqual(SectionSummary.runners(total: 1, problems: 0), SectionSummary(text: "1 runner"))
+        XCTAssertEqual(SectionSummary.runners(total: 3, problems: 1), SectionSummary(text: "3 runners", problem: "1 needs attention"))
+        XCTAssertEqual(SectionSummary.runners(total: 3, problems: 2), SectionSummary(text: "3 runners", problem: "2 need attention"))
+    }
+
+    /// The saved choice is found again only while these names stay as they are.
+    func testEachSectionRemembersItselfUnderItsOwnName() {
+        XCTAssertEqual(CardSection.allCases.map(\.key),
+                       ["collapsed.orchestrator", "collapsed.onDemand", "collapsed.upNext", "collapsed.throughput", "collapsed.runners"])
+    }
+}

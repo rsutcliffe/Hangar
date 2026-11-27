@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.27 - 2026-11-27
+
+- You can collapse the window's sections: click a heading to hide or show Orchestrator, On-demand runners, Up next, Throughput, and the runner cards, which now sit together under a Runners heading. A collapsed section is one line with a short summary. Problems stay in red on it: orchestrator problems, stuck jobs, failed runs and runners that need attention. A section does not open by itself. Everything starts open, and Hangar remembers what you collapsed.
+
 ## 0.1.26 - 2026-11-27
 
 - Each on-demand runner row now shows the job's name after the workflow's. Without it, two jobs from one run, such as the parts of a split test suite, looked like the same row twice. In a long row the end of the branch name is what gets cut off.

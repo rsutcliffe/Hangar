@@ -86,16 +86,12 @@ struct OrchestratorCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Orchestrator").font(.system(size: 12, weight: .semibold)).padding(.bottom, 6)
+        CollapsibleSection(.orchestrator, title: "Orchestrator", summary: .orchestrator(parts)) {
             ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
                 Divider().overlay(Theme.line)
                 section(part).padding(.vertical, 8)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 14).padding(.horizontal, 16)
-        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: Theme.cardRadius))
     }
 
     @ViewBuilder private func section(_ part: Part) -> some View {
