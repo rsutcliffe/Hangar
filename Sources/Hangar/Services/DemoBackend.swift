@@ -7,6 +7,7 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
     let scenario: Scenario
     private let lock = NSLock()
     private var restarted: [String: Date] = [:]
+    private var prioritised: String?
     private let t0 = Date()
 
     init(scenario: Scenario) { self.scenario = scenario }
@@ -74,7 +75,7 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
             snap.tokenExpiry = now.addingTimeInterval(9 * 86_400)
             if hostDown { snap.unreachable = ["mac-mini"]; snap.warnings = ["mac-mini unreachable (ssh: connect to host mac-mini port 22: Operation timed out)"] }
         }
-        snap.orchestrator = Self.orchestratorState(now: now)
+        snap.orchestrator = demoState(now: now)
         snap.orchestratorSeenOn = "mac-mini"
         snap.failedSteps = [RunnerJobKey(runId: 17_000_000_103, runner: "web-plain-1795015491425386000"): "Run integration tests",
                             RunnerJobKey(runId: 17_000_000_101, runner: "web-plain-1795015400000000002"): "Compile"]
@@ -124,6 +125,16 @@ final class DemoBackend: MonitorBackend, @unchecked Sendable {
                               "studio": .init(refusedSec: ["reach": back == 0 ? 840 : 0], noRoomSec: [:], hungReleased: 0, failedStarts: 0)])
             })
     }
+
+    private func demoState(now: Date) -> OrchestratorState {
+        var state = Self.orchestratorState(now: now)
+        state.priorityRepos = ["api-server", "web"]
+        state.priority = lock.withLock { prioritised }.map { .init(repo: $0, until: now.addingTimeInterval(PriorityRule.duration)) }
+        return state
+    }
+
+    func setPriority(_ repo: String?, config: Config) async throws { lock.withLock { prioritised = repo } }
+    func readOrchestrator(config: Config) async -> OrchestratorState? { demoState(now: Date()) }
 
     func restart(_ id: String, config: Config) async throws { lock.withLock { restarted[id] = Date() } }
     func setRunnerService(_ id: String, running: Bool, config: Config) async throws {}

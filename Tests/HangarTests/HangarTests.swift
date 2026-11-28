@@ -1109,6 +1109,18 @@ final class FakeBackend: MonitorBackend, @unchecked Sendable {
     func restart(_ id: String, config: Config) async throws {}
     func setRunnerService(_ id: String, running: Bool, config: Config) async throws {}
     func diagnose(config: Config) async -> ConnectionReport { ConnectionReport() }
+    nonisolated(unsafe) var written: [String?] = []
+    nonisolated(unsafe) var writeError: Error?
+    nonisolated(unsafe) var reads: [OrchestratorState] = []
+    nonisolated(unsafe) var onRead: (@MainActor () -> Void)?
+    func setPriority(_ repo: String?, config: Config) async throws {
+        if let writeError { throw writeError }
+        written.append(repo)
+    }
+    func readOrchestrator(config: Config) async -> OrchestratorState? {
+        await MainActor.run { onRead?() }
+        return reads.isEmpty ? nil : reads.removeFirst()
+    }
 }
 
 @MainActor
@@ -2613,5 +2625,129 @@ final class SectionSummaryTests: XCTestCase {
     func testEachSectionRemembersItselfUnderItsOwnName() {
         XCTAssertEqual(CardSection.allCases.map(\.key),
                        ["collapsed.orchestrator", "collapsed.onDemand", "collapsed.upNext", "collapsed.throughput", "collapsed.runners"])
+    }
+}
+
+final class PriorityRuleTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_795_000_000)
+
+    private func state(repos: [String]? = ["web", "api-server"], on: String? = nil, heartbeatAgo: Double = 10) -> OrchestratorState {
+        var s = OrchestratorState(version: 1, heartbeat: now.addingTimeInterval(-heartbeatAgo))
+        s.priorityRepos = repos
+        if let on { s.priority = .init(repo: on, until: now.addingTimeInterval(3600)) }
+        return s
+    }
+
+    func testDecodesWithAndWithoutThePriorityFields() throws {
+        let old = try XCTUnwrap(OrchestratorState.parse(#"{"version":1,"heartbeat":"2026-11-28T10:00:00Z"}"#))
+        XCTAssertNil(old.priorityRepos)
+        XCTAssertNil(old.priority)
+        let new = try XCTUnwrap(OrchestratorState.parse(
+            #"{"version":1,"heartbeat":"2026-11-28T10:00:00Z","priorityRepos":["web"],"priority":{"repo":"web","until":"2026-11-28T12:00:00Z"}}"#))
+        XCTAssertEqual(new.priorityRepos, ["web"])
+        XCTAssertEqual(new.priority?.repo, "web")
+        XCTAssertEqual(new.priority?.until, ISO8601DateFormatter().date(from: "2026-11-28T12:00:00Z"))
+    }
+
+    func testNoChoicesWithoutACurrentOrchestratorThatSupportsPriority() {
+        XCTAssertEqual(PriorityRule.choices(state: state(), now: now), ["web", "api-server"])
+        XCTAssertEqual(PriorityRule.choices(state: nil, now: now), [])
+        XCTAssertEqual(PriorityRule.choices(state: state(repos: nil), now: now), [], "an older orchestrator")
+        XCTAssertEqual(PriorityRule.choices(state: state(heartbeatAgo: 3600), now: now), [])
+        XCTAssertEqual(PriorityRule.choices(state: state(repos: ["web", "a b", "x\"y", "$(id)"]), now: now), ["web"])
+    }
+
+    func testStatusFollowsWhatTheOrchestratorReports() {
+        func status(_ s: OrchestratorState?, _ asked: String??, ago: Double = 0, error: String? = nil) -> PriorityStatus {
+            PriorityRule.status(state: s, asked: asked.map { PriorityAsk(repo: $0, since: now.addingTimeInterval(-ago)) }, writeError: error, now: now)
+        }
+        let on = PriorityStatus.on(repo: "web", until: now.addingTimeInterval(3600))
+        XCTAssertEqual(status(state(), nil), .off)
+        XCTAssertEqual(status(state(on: "web"), nil), on)
+        XCTAssertEqual(status(state(on: "web", heartbeatAgo: 3600), nil), .off, "a stale report is not shown as on")
+        XCTAssertEqual(status(state(), .some("web"), ago: 59), .asking(repo: "web", since: now.addingTimeInterval(-59)))
+        XCTAssertEqual(status(state(), .some("web"), ago: 60), .failed("The orchestrator has not confirmed it. It reports no priority."))
+        XCTAssertEqual(status(state(on: "api-server"), .some("web"), ago: 60),
+                       .failed("The orchestrator has not confirmed it. It reports api-server first."))
+        XCTAssertEqual(status(state(on: "web"), .some("WEB"), ago: 5), on)
+        XCTAssertEqual(status(state(), .some(nil), ago: 5), .off, "a stop is confirmed by there being no priority")
+        XCTAssertEqual(status(state(on: "web"), .some(nil), ago: 5), .asking(repo: nil, since: now.addingTimeInterval(-5)))
+        XCTAssertEqual(status(state(), .some("web"), error: "Permission denied"),
+                       .failed("Could not send the choice: Permission denied. The orchestrator reports no priority."))
+        XCTAssertEqual(status(state(), .some("web"), ago: 301), .off, "an old failure is dropped")
+    }
+
+    func testTheFileSaysWhoAndForTwoHours() {
+        XCTAssertEqual(PriorityRule.file(repo: "web", now: Date(timeIntervalSince1970: 1_795_000_000)),
+                       "{\"repo\":\"web\",\"until\":\"2026-11-18T13:06:40Z\"}\n")
+        XCTAssertEqual(PriorityRule.file(repo: nil, now: now), "{\"repo\":\"\"}\n")
+    }
+
+    /// The name reaches the Mac on standard input, so no shell ever reads it.
+    func testTheWriteScriptCarriesNoContent() {
+        XCTAssertEqual(PriorityRule.writeScript,
+                       #"f="$HOME/.config/runner-orchestrator/priority.json"; cat > "$f.tmp" && mv "$f.tmp" "$f""#)
+    }
+
+    func testTheScriptReplacesTheFileWithItsInput() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("priority-\(UUID().uuidString)")
+        let dir = home.appendingPathComponent(".config/runner-orchestrator")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let content = PriorityRule.file(repo: "web", now: now)
+        _ = try await Shell.run("/usr/bin/env", ["HOME=\(home.path)", "/bin/sh", "-c", PriorityRule.writeScript], stdin: content)
+        XCTAssertEqual(try String(contentsOf: dir.appendingPathComponent("priority.json"), encoding: .utf8), content)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), ["priority.json"])
+    }
+}
+
+@MainActor
+final class PriorityStoreTests: XCTestCase {
+    private func state(on: String? = nil) -> OrchestratorState {
+        var s = OrchestratorState(version: 1, heartbeat: Date())
+        s.priorityRepos = ["web"]
+        if let on { s.priority = .init(repo: on, until: Date().addingTimeInterval(3600)) }
+        return s
+    }
+
+    private func store(_ backend: FakeBackend) async -> MonitorStore {
+        var snap = BackendSnapshot(runners: [], queue: [])
+        snap.orchestrator = state()
+        snap.orchestratorSeenOn = "mac"
+        backend.script = [.success(snap)]
+        let store = MonitorStore(backend: backend)
+        store.recordHistory = false
+        store.priorityReadInterval = 0.01
+        await store.refresh()
+        return store
+    }
+
+    func testAChoiceIsShownAsOnOnlyOnceTheOrchestratorSaysSo() async {
+        let backend = FakeBackend([])
+        let store = await store(backend)
+        backend.reads = [state(), state(on: "web")]
+        var seen: [PriorityStatus] = []
+        backend.onRead = { seen.append(store.priorityStatus(now: Date())) }
+        await store.choosePriority("web")
+        XCTAssertEqual(backend.written, ["web"])
+        guard case .asking = seen.first else { return XCTFail("shown as \(String(describing: seen.first)) after only a write") }
+        guard case .on("web", _) = store.priorityStatus(now: Date()) else { return XCTFail("\(store.priorityStatus(now: Date()))") }
+    }
+
+    func testAProjectThatWasNotOfferedIsNeverWritten() async {
+        let backend = FakeBackend([])
+        let store = await store(backend)
+        await store.choosePriority("elsewhere")
+        XCTAssertEqual(backend.written, [])
+        XCTAssertEqual(store.priorityStatus(now: Date()), .off)
+    }
+
+    func testAFailedWriteIsSaidSo() async {
+        let backend = FakeBackend([])
+        let store = await store(backend)
+        backend.writeError = ShellError.failed(1, "ssh: connect failed\nPermission denied")
+        await store.choosePriority("web")
+        XCTAssertEqual(store.priorityStatus(now: Date()),
+                       .failed("Could not send the choice: Permission denied. The orchestrator reports no priority."))
     }
 }
