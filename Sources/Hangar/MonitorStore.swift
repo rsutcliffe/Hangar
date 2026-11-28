@@ -17,6 +17,9 @@ final class MonitorStore {
     /// What was last asked about priority, until the orchestrator's report shows it.
     private var priorityAsked: PriorityAsk?
     private var priorityWriteError: String?
+    /// The latest write, so the next one can follow it, and how many are still going.
+    private var priorityWrite: Task<Void, Error>?
+    private var priorityWrites = 0
     /// How often the orchestrator's file alone is read while a choice is unconfirmed. A test sets it short.
     var priorityReadInterval: TimeInterval = 5
     private var orchestratorAnnouncer = OrchestratorAnnouncer()
@@ -146,7 +149,20 @@ final class MonitorStore {
         if let repo, !PriorityRule.choices(state: orchestrator, now: now).contains(repo) { return }
         let config = Config.load(), ask = PriorityAsk(repo: repo, since: now)
         priorityAsked = ask; priorityWriteError = nil
-        do { try await backend.setPriority(repo, config: config) } catch {
+        // One write at a time, in the order chosen: the last choice is the last thing written. One already overtaken is skipped.
+        let previous = priorityWrite
+        let write = Task { [backend] in
+            _ = await previous?.result
+            guard priorityAsked == ask else { return }
+            try await backend.setPriority(repo, config: config)
+        }
+        priorityWrite = write
+        priorityWrites += 1
+        do {
+            try await write.value
+            priorityWrites -= 1
+        } catch {
+            priorityWrites -= 1
             guard priorityAsked == ask else { return }
             if case ShellError.failed(_, let message) = error {
                 priorityWriteError = message.split(separator: "\n").last.map(String.init) ?? "the command failed"
@@ -164,7 +180,9 @@ final class MonitorStore {
 
     /// A confirmed choice is forgotten, so that priority ending later does not read as a failure to apply it.
     private func forgetPriorityOnceShown(now: Date) {
-        if let ask = priorityAsked, priorityWriteError == nil, PriorityRule.confirms(orchestrator, ask.repo, now: now) { priorityAsked = nil }
+        // Not while a write is going: choosing what is already on matches at once, and a write that then fails must still be said.
+        if let ask = priorityAsked, priorityWrites == 0, priorityWriteError == nil,
+           PriorityRule.confirms(orchestrator, ask.repo, now: now) { priorityAsked = nil }
     }
 
     private func apply(_ snapshot: BackendSnapshot, config: Config, now: Date) {
@@ -394,7 +412,7 @@ final class MonitorStore {
     }
 
     private func orchestratorNotices(_ snap: BackendSnapshot, config: Config, now: Date) {
-        orchestrator = snap.orchestrator
+        orchestrator = Self.newer(held: orchestrator, polled: snap.orchestrator)
         orchestratorSeen = snap.orchestratorSeenOn != nil
         orchestratorOtherVersion = snap.orchestratorOtherVersion
         orchestratorLost = snap.orchestratorLost
@@ -407,6 +425,14 @@ final class MonitorStore {
                                             maxGap: TimeInterval(max(config.pollSeconds, 60) + 120),
                                             quiet: QuietHours.isQuiet(now, config: config))
         for n in due { notifier.notifyNotice(key: n.key, title: n.title, body: n.body) }
+    }
+
+    /// A poll reads the file when it starts and then waits on GitHub, so a read made meanwhile can be newer than what it
+    /// brings. A much later heartbeat than the poll's is a clock that was set back, so the poll is believed then.
+    static func newer(held: OrchestratorState?, polled: OrchestratorState?) -> OrchestratorState? {
+        guard let held, let polled else { return polled }
+        let ahead = held.heartbeat.timeIntervalSince(polled.heartbeat)
+        return ahead > 0 && ahead < OrchestratorState.staleAfter ? held : polled
     }
 
     private func stopService(_ id: String, config: Config) {

@@ -1113,9 +1113,19 @@ final class FakeBackend: MonitorBackend, @unchecked Sendable {
     nonisolated(unsafe) var writeError: Error?
     nonisolated(unsafe) var reads: [OrchestratorState] = []
     nonisolated(unsafe) var onRead: (@MainActor () -> Void)?
+    nonisolated(unsafe) var writeDelays: [Double] = []
+    nonisolated(unsafe) private(set) var writesAtOnce = 0
+    nonisolated(unsafe) private(set) var mostWritesAtOnce = 0
+    private let writeLock = NSLock()
     func setPriority(_ repo: String?, config: Config) async throws {
+        let delay = writeLock.withLock { () -> Double in
+            writesAtOnce += 1; mostWritesAtOnce = max(mostWritesAtOnce, writesAtOnce)
+            return writeDelays.isEmpty ? 0 : writeDelays.removeFirst()
+        }
+        defer { writeLock.withLock { writesAtOnce -= 1 } }
+        if delay > 0 { try await Task.sleep(for: .seconds(delay)) }
         if let writeError { throw writeError }
-        written.append(repo)
+        writeLock.withLock { written.append(repo) }
     }
     func readOrchestrator(config: Config) async -> OrchestratorState? {
         await MainActor.run { onRead?() }
@@ -2687,7 +2697,7 @@ final class PriorityRuleTests: XCTestCase {
     /// The name reaches the Mac on standard input, so no shell ever reads it.
     func testTheWriteScriptCarriesNoContent() {
         XCTAssertEqual(PriorityRule.writeScript,
-                       #"f="$HOME/.config/runner-orchestrator/priority.json"; cat > "$f.tmp" && mv "$f.tmp" "$f""#)
+                       #"f="$HOME/.config/runner-orchestrator/priority.json"; t="$f.tmp.$$"; cat > "$t" && mv "$t" "$f""#)
     }
 
     func testTheScriptReplacesTheFileWithItsInput() async throws {
@@ -2733,6 +2743,55 @@ final class PriorityStoreTests: XCTestCase {
         XCTAssertEqual(backend.written, ["web"])
         guard case .asking = seen.first else { return XCTFail("shown as \(String(describing: seen.first)) after only a write") }
         guard case .on("web", _) = store.priorityStatus(now: Date()) else { return XCTFail("\(store.priorityStatus(now: Date()))") }
+    }
+
+    /// Two writes at once could mix in one file, or land in the wrong order and leave on what was just stopped.
+    func testChoicesAreWrittenOneAtATimeAndTheLastOneIsLast() async {
+        let backend = FakeBackend([])
+        let store = await store(backend)
+        backend.writeDelays = [0.2]
+        backend.reads = [state()]
+        let first = Task { await store.choosePriority("web") }
+        try? await Task.sleep(for: .seconds(0.05))
+        await store.choosePriority(nil)
+        await first.value
+        XCTAssertEqual(backend.mostWritesAtOnce, 1)
+        XCTAssertEqual(backend.written, ["web", nil])
+    }
+
+    /// A poll reads the file at its start and then waits on GitHub, so what it brings can be older than a read made since.
+    func testAnOlderPollDoesNotUndoANewerRead() async {
+        let backend = FakeBackend([])
+        let store = await store(backend)
+        backend.reads = [state(on: "web")]
+        await store.choosePriority("web")
+        var old = state()
+        old.heartbeat = Date().addingTimeInterval(-20)
+        var snap = BackendSnapshot(runners: [], queue: [])
+        snap.orchestrator = old
+        snap.orchestratorSeenOn = "mac"
+        backend.script = [.success(snap)]
+        await store.refresh()
+        guard case .on("web", _) = store.priorityStatus(now: Date()) else { return XCTFail("\(store.priorityStatus(now: Date()))") }
+    }
+
+    /// Choosing what is already on, to extend it: the old report matches at once, and must not hide a failed write.
+    func testAFailedRepeatChoiceIsStillSaidAfterAPollInTheMiddle() async {
+        let backend = FakeBackend([])
+        let store = await store(backend)
+        var snap = BackendSnapshot(runners: [], queue: [])
+        snap.orchestrator = state(on: "web")
+        snap.orchestratorSeenOn = "mac"
+        backend.script = [.success(snap), .success(snap)]
+        await store.refresh()
+        backend.writeDelays = [0.2]
+        backend.writeError = ShellError.failed(1, "Permission denied")
+        let choice = Task { await store.choosePriority("web") }
+        try? await Task.sleep(for: .seconds(0.05))
+        await store.refresh()
+        await choice.value
+        XCTAssertEqual(store.priorityStatus(now: Date()),
+                       .failed("Could not send the choice: Permission denied. The orchestrator reports web first."))
     }
 
     func testAProjectThatWasNotOfferedIsNeverWritten() async {

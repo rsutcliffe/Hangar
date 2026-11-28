@@ -20,7 +20,8 @@ enum PriorityRule {
     private static let forgetAfter: TimeInterval = 5 * 60
 
     /// The file's name is fixed and its content arrives on standard input, so a project's name never reaches a shell.
-    static let writeScript = #"f="$HOME/.config/runner-orchestrator/priority.json"; cat > "$f.tmp" && mv "$f.tmp" "$f""#
+    /// The temporary name carries the shell's process number, so two writes never share one.
+    static let writeScript = #"f="$HOME/.config/runner-orchestrator/priority.json"; t="$f.tmp.$$"; cat > "$t" && mv "$t" "$f""#
 
     /// The projects that can be chosen. None unless a current orchestrator says it supports priority.
     static func choices(state: OrchestratorState?, now: Date) -> [String] {
