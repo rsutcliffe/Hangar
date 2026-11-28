@@ -255,6 +255,12 @@ actor HostService {
         return try? await Shell.run("/bin/sh", ["-c", cmd], timeout: 10)
     }
 
+    /// Replaces the orchestrator's priority file with `content`.
+    func writePriority(_ host: HostSpec, content: String) async throws {
+        if let t = host.target { _ = try await ssh(t, PriorityRule.writeScript, stdin: content, timeout: 15) }
+        else { _ = try await Shell.run("/bin/sh", ["-c", PriorityRule.writeScript], stdin: content, timeout: 15) }
+    }
+
     /// nil when the host has no native runner dirs.
     func nativeSnapshot(_ host: HostSpec) async throws -> VMSnapshot? {
         let out: String

@@ -48,23 +48,27 @@ struct SectionSummary: Equatable {
 }
 
 /// A heading that shows or hides what is under it. Collapsed, it is one line with a summary, so nothing goes unnoticed.
-struct CollapsibleSection<Trailing: View, Content: View>: View {
+struct CollapsibleSection<Trailing: View, Accessory: View, Content: View>: View {
     private let title: String
     private let summary: SectionSummary
     /// False draws no card around the open section, for content that brings its own cards.
     private let card: Bool
     private let spacing: CGFloat
     private let trailing: Trailing
+    /// A control beside the heading, outside the button that collapses, so it works open or collapsed.
+    private let accessory: Accessory
     private let content: Content
     @AppStorage private var collapsed: Bool
 
     init(_ section: CardSection, title: String, summary: SectionSummary, card: Bool = true, spacing: CGFloat = 0,
-         @ViewBuilder trailing: () -> Trailing = { EmptyView() }, @ViewBuilder content: () -> Content) {
+         @ViewBuilder trailing: () -> Trailing = { EmptyView() }, @ViewBuilder accessory: () -> Accessory = { EmptyView() },
+         @ViewBuilder content: () -> Content) {
         self.title = title
         self.summary = summary
         self.card = card
         self.spacing = spacing
         self.trailing = trailing()
+        self.accessory = accessory()
         self.content = content()
         _collapsed = AppStorage(wrappedValue: false, section.key)
     }
@@ -72,22 +76,25 @@ struct CollapsibleSection<Trailing: View, Content: View>: View {
     var body: some View {
         let boxed = card || collapsed
         VStack(alignment: .leading, spacing: 0) {
-            Button { collapsed.toggle() } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: collapsed ? "chevron.right" : "chevron.down").font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(Theme.muted).frame(width: 10)
-                    Text(title).font(.system(size: 12, weight: .semibold)).lineLimit(1).fixedSize()
-                    Spacer(minLength: 12)
-                    if collapsed { summaryLine } else { trailing }
+            HStack(spacing: 10) {
+                Button { collapsed.toggle() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: collapsed ? "chevron.right" : "chevron.down").font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Theme.muted).frame(width: 10)
+                        Text(title).font(.system(size: 12, weight: .semibold)).lineLimit(1).fixedSize()
+                        Spacer(minLength: 12)
+                        if collapsed { summaryLine } else { trailing }
+                    }
+                    .padding(.horizontal, boxed ? 0 : 16)                   // lines up with the headings of the boxed sections
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, boxed ? 0 : 16)                   // lines up with the headings of the boxed sections
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .help(collapsed ? "Show \(title)" : "Hide \(title)")
+                .accessibilityLabel(Text(verbatim: ([title] + (collapsed ? [summary.problem, summary.text] : [])).filter { !$0.isEmpty }
+                    .joined(separator: ", ")))
+                .accessibilityValue(collapsed ? "Collapsed" : "Expanded")
+                accessory
             }
-            .buttonStyle(.plain)
-            .help(collapsed ? "Show \(title)" : "Hide \(title)")
-            .accessibilityLabel(Text(verbatim: ([title] + (collapsed ? [summary.problem, summary.text] : [])).filter { !$0.isEmpty }
-                .joined(separator: ", ")))
-            .accessibilityValue(collapsed ? "Collapsed" : "Expanded")
             if !collapsed {
                 VStack(alignment: .leading, spacing: spacing) { content }.padding(.top, max(6, spacing))
             }

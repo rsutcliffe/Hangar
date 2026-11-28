@@ -49,6 +49,10 @@ protocol MonitorBackend: Sendable {
     func restart(_ id: String, config: Config) async throws
     func setRunnerService(_ id: String, running: Bool, config: Config) async throws
     func diagnose(config: Config) async -> ConnectionReport
+    /// Writes the choice on the Mac the orchestrator's state came from; nil stops it.
+    func setPriority(_ repo: String?, config: Config) async throws
+    /// That Mac's state file only, with nothing asked of GitHub.
+    func readOrchestrator(config: Config) async -> OrchestratorState?
 }
 
 enum BackendError: Error, LocalizedError {
@@ -206,6 +210,18 @@ final class LiveBackend: MonitorBackend, @unchecked Sendable {
         snap.needsLocalNetwork = lock.withLock { permissionHint }
         if config.checkUpdates { snap.latestApp = await github.latestAppRelease() }
         return snap
+    }
+
+    private func supplier() -> HostSpec? { lock.withLock { orchestrator.target }.map(HostSpec.init) }
+
+    func setPriority(_ repo: String?, config: Config) async throws {
+        guard let host = supplier() else { throw ShellError.failed(2, "No Mac has supplied the orchestrator's state") }
+        try await hosts.writePriority(host, content: PriorityRule.file(repo: repo, now: Date()))
+    }
+
+    func readOrchestrator(config: Config) async -> OrchestratorState? {
+        guard let host = supplier() else { return nil }
+        return await hosts.orchestratorState(host).flatMap(OrchestratorState.parse)
     }
 
     private func place(_ id: String) throws -> Place {

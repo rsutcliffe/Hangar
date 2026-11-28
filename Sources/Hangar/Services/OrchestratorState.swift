@@ -17,6 +17,16 @@ struct OrchestratorState: Codable, Equatable, Sendable {
     /// Newest last.
     var days: [Day]? = nil
 
+    /// The projects that can be put first. Absent from an orchestrator that cannot.
+    var priorityRepos: [String]? = nil
+    /// Present only while one project is first.
+    var priority: Priority? = nil
+
+    struct Priority: Codable, Equatable, Sendable {
+        var repo: String? = nil
+        var until: Date? = nil
+    }
+
     struct Problem: Codable, Equatable, Sendable {
         var id: String? = nil
         /// Empty for a problem that belongs to no host.

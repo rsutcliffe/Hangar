@@ -2,6 +2,10 @@
 
 Each release's notes are the section for its version below; `scripts/release.sh --publish` uses them as the GitHub release notes.
 
+## 0.1.28 - 2026-11-28
+
+- If you run the runner orchestrator, you can put one project's jobs first. Choose it from Prioritise beside the Up next heading. While it is on, a line under the window's header names the project and when it ends, with a Stop button, and that project's waiting on-demand jobs are listed first and marked Priority. It ends by itself after two hours. The orchestrator then keeps runner space for that project's waiting jobs, so other projects may wait longer; running jobs are not stopped, and which of the project's jobs goes first is up to GitHub. Jobs for persistent runners are not affected. Space is kept only for jobs GitHub has already handed to the orchestrator, so between one job finishing and the next one arriving another project can take it; other projects can wait up to the full two hours; and if the orchestrator's count of waiting jobs is wrong, a waiting job can be missed or a runner can start with no job. Hangar shows a priority as on only once the orchestrator reports it, and says so in red if it does not within a minute. It needs an orchestrator that supports priority; with an older one nothing new appears. To make the choice, Hangar writes one small file on the orchestrator's Mac, using the SSH access it already has.
+
 ## 0.1.27 - 2026-11-27
 
 - You can collapse the window's sections: click a heading to hide or show Orchestrator, On-demand runners, Up next, Throughput, and the runner cards, which now sit together under a Runners heading. A collapsed section is one line with a short summary. Problems stay in red on it: orchestrator problems, stuck jobs, failed runs and runners that need attention. A section does not open by itself. Everything starts open, and Hangar remembers what you collapsed.

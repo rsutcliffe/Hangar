@@ -14,6 +14,14 @@ final class MonitorStore {
     /// Kept across polls: GitHub's jobs for a finished run are only read for ten minutes, and the throughput card lists
     /// failures for longer than that.
     private(set) var failedSteps: [RunnerJobKey: String] = [:]
+    /// What was last asked about priority, until the orchestrator's report shows it.
+    private var priorityAsked: PriorityAsk?
+    private var priorityWriteError: String?
+    /// The latest write, so the next one can follow it, and how many are still going.
+    private var priorityWrite: Task<Void, Error>?
+    private var priorityWrites = 0
+    /// How often the orchestrator's file alone is read while a choice is unconfirmed. A test sets it short.
+    var priorityReadInterval: TimeInterval = 5
     private var orchestratorAnnouncer = OrchestratorAnnouncer()
     private let startedAt = Date()
     private(set) var lastUpdated: Date?
@@ -128,6 +136,53 @@ final class MonitorStore {
                 return
             }
         }
+    }
+
+    func priorityStatus(now: Date) -> PriorityStatus {
+        PriorityRule.status(state: orchestrator, asked: priorityAsked, writeError: priorityWriteError, now: now)
+    }
+
+    /// Asks the orchestrator to put `repo` first, or with nil to stop, then reads its file until it says so. A poll also asks
+    /// GitHub and may be slow or fail, so it is not waited for. A later choice takes over from this one.
+    func choosePriority(_ repo: String?) async {
+        let now = Date()
+        if let repo, !PriorityRule.choices(state: orchestrator, now: now).contains(repo) { return }
+        let config = Config.load(), ask = PriorityAsk(repo: repo, since: now)
+        priorityAsked = ask; priorityWriteError = nil
+        // One write at a time, in the order chosen: the last choice is the last thing written. One already overtaken is skipped.
+        let previous = priorityWrite
+        let write = Task { [backend] in
+            _ = await previous?.result
+            guard priorityAsked == ask else { return }
+            try await backend.setPriority(repo, config: config)
+        }
+        priorityWrite = write
+        priorityWrites += 1
+        do {
+            try await write.value
+            priorityWrites -= 1
+        } catch {
+            priorityWrites -= 1
+            guard priorityAsked == ask else { return }
+            if case ShellError.failed(_, let message) = error {
+                priorityWriteError = message.split(separator: "\n").last.map(String.init) ?? "the command failed"
+            } else { priorityWriteError = (error as? LocalizedError)?.errorDescription ?? "the command failed" }
+            return
+        }
+        while priorityAsked == ask, Date().timeIntervalSince(ask.since) < PriorityRule.confirmWithin {
+            try? await Task.sleep(for: .seconds(priorityReadInterval))
+            if Task.isCancelled { return }
+            guard let state = await backend.readOrchestrator(config: config), priorityAsked == ask else { continue }
+            orchestrator = state
+            forgetPriorityOnceShown(now: Date())
+        }
+    }
+
+    /// A confirmed choice is forgotten, so that priority ending later does not read as a failure to apply it.
+    private func forgetPriorityOnceShown(now: Date) {
+        // Not while a write is going: choosing what is already on matches at once, and a write that then fails must still be said.
+        if let ask = priorityAsked, priorityWrites == 0, priorityWriteError == nil,
+           PriorityRule.confirms(orchestrator, ask.repo, now: now) { priorityAsked = nil }
     }
 
     private func apply(_ snapshot: BackendSnapshot, config: Config, now: Date) {
@@ -357,10 +412,11 @@ final class MonitorStore {
     }
 
     private func orchestratorNotices(_ snap: BackendSnapshot, config: Config, now: Date) {
-        orchestrator = snap.orchestrator
+        orchestrator = Self.newer(held: orchestrator, polled: snap.orchestrator)
         orchestratorSeen = snap.orchestratorSeenOn != nil
         orchestratorOtherVersion = snap.orchestratorOtherVersion
         orchestratorLost = snap.orchestratorLost
+        forgetPriorityOnceShown(now: now)
         failedSteps.merge(snap.failedSteps) { _, new in new }
         if failedSteps.count > 500 { failedSteps = snap.failedSteps }       // far more than the 20 failures the file keeps
         // Polls are at most the interval apart (60 s with the window hidden); two more minutes covers a slow one.
@@ -369,6 +425,14 @@ final class MonitorStore {
                                             maxGap: TimeInterval(max(config.pollSeconds, 60) + 120),
                                             quiet: QuietHours.isQuiet(now, config: config))
         for n in due { notifier.notifyNotice(key: n.key, title: n.title, body: n.body) }
+    }
+
+    /// A poll reads the file when it starts and then waits on GitHub, so a read made meanwhile can be newer than what it
+    /// brings. A much later heartbeat than the poll's is a clock that was set back, so the poll is believed then.
+    static func newer(held: OrchestratorState?, polled: OrchestratorState?) -> OrchestratorState? {
+        guard let held, let polled else { return polled }
+        let ahead = held.heartbeat.timeIntervalSince(polled.heartbeat)
+        return ahead > 0 && ahead < OrchestratorState.staleAfter ? held : polled
     }
 
     private func stopService(_ id: String, config: Config) {

@@ -15,6 +15,7 @@ struct HangarApp: App {
         var action: ((MonitorStore) -> Void)?
         if demo, args.contains("--scenario-restarting") { action = { $0.restart("arm-02") } }
         if demo, args.contains("--scenario-paused") { action = { $0.toggleDrain("x86-01") } }
+        if demo, args.contains("--scenario-priority") { action = { store in Task { await store.choosePriority("web") } } }
         if demo { s.recordHistory = false; s.memorySustain = 0; s.loadDemoHistory() }
         // The app is also the unit tests' host: there it must not contact real hosts, notify, or write the user's settings.
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil { s.start(demoAction: action) }
