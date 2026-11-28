@@ -16,6 +16,11 @@ struct MonitorWindow: View {
             GlassEffectContainer(spacing: 10) {
                 VStack(spacing: 12) {
                     header(now: ctx.date)
+                    let priority = store.priorityStatus(now: ctx.date)
+                    let priorityOn = PriorityRule.isOn(state: store.orchestrator, now: ctx.date)
+                    if priority != .off {
+                        PriorityLine(status: priority, canStop: priorityOn) { Task { await store.choosePriority(nil) } }
+                    }
                     // What is running and waiting comes first: with many runner cards below, the window scrolls, and the work in
                     // progress must not be the part that scrolls out of sight.
                     let orchestrator = OrchestratorCard.sections(state: store.orchestrator, seen: store.orchestratorSeen,
@@ -23,7 +28,11 @@ struct MonitorWindow: View {
                                                                  now: ctx.date)
                     if !orchestrator.isEmpty { OrchestratorCard(parts: orchestrator) }
                     if !store.onDemand.isEmpty { OnDemandCard(runners: store.onDemand, now: ctx.date) }
-                    UpNextCard(queue: store.queue, now: ctx.date)
+                    UpNextCard(queue: store.queue, now: ctx.date,
+                               priority: priorityOn ? store.orchestrator?.priority?.repo : nil,
+                               choices: PriorityRule.choices(state: store.orchestrator, now: ctx.date)) { repo in
+                        Task { await store.choosePriority(repo) }
+                    }
                     // Tall, so it sits below the work in progress.
                     if let t = store.orchestrator?.throughputSummary(failedSteps: store.failedSteps, now: ctx.date) { ThroughputCard(summary: t) }
                     if !store.runners.isEmpty {

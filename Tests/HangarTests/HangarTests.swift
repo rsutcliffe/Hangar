@@ -2266,7 +2266,8 @@ final class OrchestratorStateTests: XCTestCase {
         }
         let labels = ["idle_removed": "Idle runner removed", "hung_release": "Hung runner released", "failed_start": "Runner failed to start",
                       "runner_error": "Runner error", "count_mismatch": "Waiting count mismatch", "problem_opened": "Problem opened",
-                      "problem_closed": "Problem closed", "memory_kill": "Memory kill", "brand_new_kind": "brand new kind"]
+                      "problem_closed": "Problem closed", "memory_kill": "Memory kill", "priority_on": "Priority on",
+                      "priority_off": "Priority off", "brand_new_kind": "brand new kind"]
         for (kind, label) in labels {
             XCTAssertEqual(row(kind, "widgets-1"), "\(label): widgets-1")
             XCTAssertEqual(row(kind, ""), label)
@@ -2749,5 +2750,47 @@ final class PriorityStoreTests: XCTestCase {
         await store.choosePriority("web")
         XCTAssertEqual(store.priorityStatus(now: Date()),
                        .failed("Could not send the choice: Permission denied. The orchestrator reports no priority."))
+    }
+}
+
+final class PriorityControlTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_795_000_000)
+
+    private func job(_ id: Int, _ repo: String, onDemand: Bool = true) -> QueuedJob {
+        var j = QueuedJob(id: id, repo: repo, workflow: "CI", branch: "b", runNumber: id, arch: .arm64, queuedAt: now, labels: [])
+        j.onDemand = onDemand
+        return j
+    }
+
+    func testThePrioritisedProjectsOnDemandJobsComeFirstAndTheRestKeepTheirOrder() {
+        let queue = [job(1, "api-server"), job(2, "web", onDemand: false), job(3, "web"), job(4, "api-server"), job(5, "Web")]
+        XCTAssertEqual(UpNextCard.ordered(queue, priority: "web").map(\.id), [3, 5, 1, 2, 4])
+        XCTAssertEqual(UpNextCard.ordered(queue, priority: nil).map(\.id), [1, 2, 3, 4, 5])
+    }
+
+    /// The orchestrator does not place a persistent runner's jobs, so priority does nothing for them.
+    func testOnlyOnDemandJobsAreMarked() {
+        XCTAssertTrue(UpNextCard.isPriority(job(1, "Web"), priority: "web"))
+        XCTAssertFalse(UpNextCard.isPriority(job(2, "web", onDemand: false), priority: "web"))
+        XCTAssertFalse(UpNextCard.isPriority(job(3, "api-server"), priority: "web"))
+        XCTAssertFalse(UpNextCard.isPriority(job(4, "web"), priority: nil))
+    }
+
+    func testTheLineSaysWhereThingsStand() {
+        let until = now.addingTimeInterval(3600)
+        XCTAssertNil(PriorityLine.text(.off))
+        XCTAssertEqual(PriorityLine.text(.asking(repo: "web", since: now)), "Asking the orchestrator…")
+        XCTAssertEqual(PriorityLine.text(.on(repo: "web", until: until)),
+                       "web first until \(until.formatted(date: .omitted, time: .shortened))")
+        XCTAssertEqual(PriorityLine.text(.failed("No.")), "No.")
+    }
+
+    /// A choice that failed must not take away the way to end what is still on.
+    func testStopIsOfferedWheneverTheOrchestratorReportsAPriority() {
+        var state = OrchestratorState(version: 1, heartbeat: now)
+        XCTAssertFalse(PriorityRule.isOn(state: state, now: now))
+        state.priority = .init(repo: "web", until: now.addingTimeInterval(60))
+        XCTAssertTrue(PriorityRule.isOn(state: state, now: now))
+        XCTAssertFalse(PriorityRule.isOn(state: state, now: now.addingTimeInterval(3600)))
     }
 }

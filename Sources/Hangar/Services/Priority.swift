@@ -28,6 +28,9 @@ enum PriorityRule {
         return (state.priorityRepos ?? []).filter(Config.isSafeName)
     }
 
+    /// A current report shows a priority.
+    static func isOn(state: OrchestratorState?, now: Date) -> Bool { reported(state, now: now) != nil }
+
     /// True when a current report shows what was asked.
     static func confirms(_ state: OrchestratorState?, _ repo: String?, now: Date) -> Bool {
         guard let state, !state.isStale(now: now) else { return false }

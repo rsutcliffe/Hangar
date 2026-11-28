@@ -49,7 +49,8 @@ struct OrchestratorCard: View {
     private nonisolated static func eventText(_ event: OrchestratorState.Event) -> String {
         let labels = ["idle_removed": "Idle runner removed", "hung_release": "Hung runner released", "failed_start": "Runner failed to start",
                       "runner_error": "Runner error", "count_mismatch": "Waiting count mismatch", "problem_opened": "Problem opened",
-                      "problem_closed": "Problem closed", "memory_kill": "Memory kill"]
+                      "problem_closed": "Problem closed", "memory_kill": "Memory kill",
+                      "priority_on": "Priority on", "priority_off": "Priority off"]
         let label = event.kind.nonEmpty.map { labels[$0] ?? $0.replacingOccurrences(of: "_", with: " ") } ?? "Event"
         return event.text.nonEmpty.map { "\(label): \($0)" } ?? label
     }
